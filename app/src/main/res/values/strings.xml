@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Priority Todo</string>
+    <string name="notification_channel_name">Task reminders</string>
+</resources>

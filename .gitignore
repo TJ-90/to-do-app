@@ -1,0 +1,11 @@
+.gradle/
+.idea/
+*.iml
+local.properties
+build/
+app/build/
+captures/
+.omx/
+
+# Local notes/images from the intake session are not app source.
+WhatsApp Image *.jpeg
