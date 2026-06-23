@@ -38,6 +38,8 @@ Buckets:
 - Date and time reminder picker.
 - Android notifications through `AlarmManager` and `NotificationManager`.
 - Local persistence through `SharedPreferences`.
+- Manual day/night mode toggle.
+- Minimal black, white, light-grey, and red UI treatment.
 
 ## Build
 

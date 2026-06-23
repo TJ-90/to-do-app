@@ -6,6 +6,7 @@ import android.app.DatePickerDialog;
 import android.app.NotificationManager;
 import android.app.TimePickerDialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -23,7 +24,6 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.text.DateFormat;
 import java.util.ArrayList;
@@ -32,10 +32,12 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private static final String[] DEPENDENCIES = {"None", "Sequential", "Reciprocal", "Pooled"};
+    private static final String UI_PREFS = "priority_todo_ui";
+    private static final String NIGHT_MODE = "night_mode";
+    private static final int RED = 0xFFC1121F;
 
     private final List<TodoTask> tasks = new ArrayList<>();
 
@@ -54,11 +56,15 @@ public final class MainActivity extends Activity {
     private LinearLayout taskList;
     private long selectedReminderAt;
     private String editingId;
+    private boolean nightMode;
+    private Palette palette;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         store = new TaskStore(this);
+        nightMode = getSharedPreferences(UI_PREFS, MODE_PRIVATE).getBoolean(NIGHT_MODE, false);
+        palette = Palette.from(nightMode);
         tasks.addAll(store.load());
         requestNotificationPermission();
         createNotificationChannel();
@@ -68,25 +74,41 @@ public final class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        palette = Palette.from(nightMode);
+        getWindow().setStatusBarColor(RED);
+        getWindow().setNavigationBarColor(palette.background);
+
         ScrollView scrollView = new ScrollView(this);
+        scrollView.setBackgroundColor(palette.background);
         LinearLayout root = vertical();
-        root.setPadding(dp(18), dp(18), dp(18), dp(28));
+        root.setPadding(dp(22), dp(20), dp(22), dp(32));
+        root.setBackgroundColor(palette.background);
         scrollView.addView(root);
 
-        TextView header = text("Priority Todo", 28, true);
-        header.setTextColor(0xFF172026);
-        root.addView(header);
-        root.addView(text("Sorted by score: Impact / Effort + Urgency", 14, false));
+        LinearLayout headerRow = horizontal();
+        LinearLayout headerCopy = vertical();
+        TextView header = text("Priority Todo", 30, true);
+        header.setTextColor(palette.primaryText);
+        TextView subhead = text("Score-ranked MITs with timed reminders", 14, false);
+        subhead.setTextColor(palette.secondaryText);
+        headerCopy.addView(header);
+        headerCopy.addView(subhead, matchWrapMargins(0, 2, 0, 0));
+
+        Button modeButton = quietButton(nightMode ? "Day" : "Night");
+        modeButton.setOnClickListener(view -> toggleMode());
+        headerRow.addView(headerCopy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        headerRow.addView(modeButton);
+        root.addView(headerRow);
 
         mitView = text("", 16, true);
-        mitView.setPadding(dp(14), dp(14), dp(14), dp(14));
-        mitView.setBackground(panelBackground(0xFFE6F2EE));
-        root.addView(mitView, matchWrapMargins(0, 16, 0, 14));
+        mitView.setPadding(0, dp(18), 0, dp(18));
+        mitView.setTextColor(RED);
+        root.addView(mitView, matchWrapMargins(0, 14, 0, 12));
 
         LinearLayout form = vertical();
-        form.setPadding(dp(14), dp(14), dp(14), dp(14));
-        form.setBackground(panelBackground(0xFFFFFFFF));
-        root.addView(form, matchWrapMargins(0, 0, 0, 18));
+        form.setPadding(0, dp(8), 0, dp(18));
+        form.setBackground(sectionBackground());
+        root.addView(form, matchWrapMargins(0, 0, 0, 22));
 
         form.addView(text("Task", 18, true));
         titleInput = input("Task name");
@@ -128,7 +150,7 @@ public final class MainActivity extends Activity {
         reminderLabel = text("No reminder", 14, false);
         Button reminderButton = button("Set reminder");
         reminderButton.setOnClickListener(view -> pickReminder());
-        Button clearReminderButton = button("Clear");
+        Button clearReminderButton = quietButton("Clear");
         clearReminderButton.setOnClickListener(view -> {
             selectedReminderAt = 0;
             updateReminderLabel();
@@ -212,15 +234,15 @@ public final class MainActivity extends Activity {
 
     private LinearLayout taskRow(TodoTask task) {
         LinearLayout row = vertical();
-        row.setPadding(dp(14), dp(12), dp(14), dp(12));
-        row.setBackground(panelBackground(task.completed ? 0xFFE7EBEF : 0xFFFFFFFF));
+        row.setPadding(0, dp(14), 0, dp(14));
+        row.setBackground(rowBackground(task.completed));
 
         TextView title = text(task.title + (task.completed ? "  [done]" : ""), 18, true);
-        title.setTextColor(0xFF172026);
+        title.setTextColor(task.completed ? palette.secondaryText : palette.primaryText);
         row.addView(title);
 
         TextView score = text("Score " + task.scoreLabel() + " | " + task.bucket(), 14, true);
-        score.setTextColor(task.score() >= 1000 ? 0xFFB42318 : 0xFF1C6E5A);
+        score.setTextColor(RED);
         row.addView(score, matchWrapMargins(0, 4, 0, 0));
 
         row.addView(text(taskDetails(task), 14, false), matchWrapMargins(0, 4, 0, 0));
@@ -247,7 +269,7 @@ public final class MainActivity extends Activity {
         Button edit = button("Edit");
         edit.setOnClickListener(view -> editTask(task));
 
-        Button delete = button("Delete");
+        Button delete = quietButton("Delete");
         delete.setOnClickListener(view -> {
             ReminderScheduler.cancel(this, task);
             tasks.remove(task);
@@ -345,6 +367,7 @@ public final class MainActivity extends Activity {
         reminderLabel.setText(selectedReminderAt > 0
                 ? "Reminder: " + formatDateTime(selectedReminderAt)
                 : "No reminder");
+        reminderLabel.setTextColor(selectedReminderAt > 0 ? RED : palette.secondaryText);
     }
 
     private void saveAndRender() {
@@ -420,6 +443,7 @@ public final class MainActivity extends Activity {
     private RadioButton radio(String label, String value) {
         RadioButton button = new RadioButton(this);
         button.setText(label);
+        button.setTextColor(palette.primaryText);
         button.setTag(value);
         button.setId(View.generateViewId());
         return button;
@@ -453,15 +477,16 @@ public final class MainActivity extends Activity {
     private EditText input(String hint) {
         EditText input = new EditText(this);
         input.setHint(hint);
-        input.setTextColor(0xFF172026);
-        input.setHintTextColor(0xFF7B8794);
+        input.setTextColor(palette.primaryText);
+        input.setHintTextColor(palette.secondaryText);
+        input.setBackgroundColor(palette.background);
         return input;
     }
 
     private CheckBox checkbox(String text) {
         CheckBox checkBox = new CheckBox(this);
         checkBox.setText(text);
-        checkBox.setTextColor(0xFF172026);
+        checkBox.setTextColor(palette.primaryText);
         return checkBox;
     }
 
@@ -469,7 +494,7 @@ public final class MainActivity extends Activity {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(sizeSp);
-        view.setTextColor(0xFF3B4856);
+        view.setTextColor(palette.secondaryText);
         if (bold) {
             view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         }
@@ -478,7 +503,7 @@ public final class MainActivity extends Activity {
 
     private TextView label(String value) {
         TextView view = text(value, 14, true);
-        view.setTextColor(0xFF172026);
+        view.setTextColor(palette.primaryText);
         return view;
     }
 
@@ -486,6 +511,17 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setAllCaps(false);
+        button.setTextColor(0xFFFFFFFF);
+        button.setBackground(buttonBackground(RED, RED));
+        return button;
+    }
+
+    private Button quietButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextColor(RED);
+        button.setBackground(buttonBackground(palette.background, RED));
         return button;
     }
 
@@ -502,12 +538,34 @@ public final class MainActivity extends Activity {
         return layout;
     }
 
-    private GradientDrawable panelBackground(int color) {
+    private GradientDrawable sectionBackground() {
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(dp(8));
-        drawable.setStroke(dp(1), 0xFFD5DCE3);
+        drawable.setColor(palette.background);
+        drawable.setStroke(dp(1), palette.divider);
         return drawable;
+    }
+
+    private GradientDrawable rowBackground(boolean completed) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(completed ? palette.completedSurface : palette.background);
+        drawable.setStroke(dp(1), palette.divider);
+        return drawable;
+    }
+
+    private GradientDrawable buttonBackground(int fill, int stroke) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(6));
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+    private void toggleMode() {
+        nightMode = !nightMode;
+        SharedPreferences preferences = getSharedPreferences(UI_PREFS, MODE_PRIVATE);
+        preferences.edit().putBoolean(NIGHT_MODE, nightMode).apply();
+        buildUi();
+        renderTasks();
     }
 
     private LinearLayout.LayoutParams matchWrapMargins(int left, int top, int right, int bottom) {
@@ -537,5 +595,29 @@ public final class MainActivity extends Activity {
             builder.append(values.get(index));
         }
         return builder.toString();
+    }
+
+    private static final class Palette {
+        final int background;
+        final int completedSurface;
+        final int primaryText;
+        final int secondaryText;
+        final int divider;
+
+        private Palette(int background, int completedSurface, int primaryText,
+                        int secondaryText, int divider) {
+            this.background = background;
+            this.completedSurface = completedSurface;
+            this.primaryText = primaryText;
+            this.secondaryText = secondaryText;
+            this.divider = divider;
+        }
+
+        static Palette from(boolean nightMode) {
+            if (nightMode) {
+                return new Palette(0xFF000000, 0xFF111111, 0xFFFFFFFF, 0xFFB8B8B8, 0xFF2A2A2A);
+            }
+            return new Palette(0xFFFFFFFF, 0xFFF6F6F6, 0xFF000000, 0xFF9A9A9A, 0xFFE5E5E5);
+        }
     }
 }
