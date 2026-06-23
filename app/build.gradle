@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace "com.tj90.prioritytodo"
-    compileSdk 37
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.tj90.prioritytodo"
         minSdk 26
-        targetSdk 37
+        targetSdk 36
         versionCode 1
         versionName "1.0"
     }
