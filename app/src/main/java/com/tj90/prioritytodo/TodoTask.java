@@ -3,6 +3,7 @@ package com.tj90.prioritytodo;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.Calendar;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -10,6 +11,10 @@ final class TodoTask {
     static final String HIGH = "H";
     static final String MEDIUM = "M";
     static final String LOW = "L";
+    static final String REPEAT_NONE = "none";
+    static final String REPEAT_DAY = "day";
+    static final String REPEAT_WEEK = "week";
+    static final String REPEAT_MONTH = "month";
 
     String id = UUID.randomUUID().toString();
     String title = "";
@@ -23,6 +28,8 @@ final class TodoTask {
     boolean completed;
     long createdAt = System.currentTimeMillis();
     long reminderAt;
+    String reminderRepeatUnit = REPEAT_NONE;
+    int reminderRepeatEvery = 1;
 
     double score() {
         return ((double) impactValue(impact) / effortValue(effort)) + (urgent ? 1000 : 0);
@@ -57,6 +64,8 @@ final class TodoTask {
         json.put("completed", completed);
         json.put("createdAt", createdAt);
         json.put("reminderAt", reminderAt);
+        json.put("reminderRepeatUnit", reminderRepeatUnit);
+        json.put("reminderRepeatEvery", reminderRepeatEvery);
         return json;
     }
 
@@ -74,7 +83,50 @@ final class TodoTask {
         task.completed = json.optBoolean("completed", false);
         task.createdAt = json.optLong("createdAt", System.currentTimeMillis());
         task.reminderAt = json.optLong("reminderAt", 0);
+        task.reminderRepeatUnit = normalizeRepeatUnit(json.optString("reminderRepeatUnit", REPEAT_NONE));
+        task.reminderRepeatEvery = Math.max(1, json.optInt("reminderRepeatEvery", 1));
         return task;
+    }
+
+    boolean repeatsReminder() {
+        return reminderAt > 0
+                && reminderRepeatEvery > 0
+                && !REPEAT_NONE.equals(reminderRepeatUnit);
+    }
+
+    long nextReminderAfter(long now) {
+        if (!repeatsReminder()) {
+            return 0;
+        }
+
+        Calendar calendar = Calendar.getInstance();
+        calendar.setTimeInMillis(reminderAt);
+        int field = repeatCalendarField(reminderRepeatUnit);
+        while (calendar.getTimeInMillis() <= now) {
+            calendar.add(field, reminderRepeatEvery);
+        }
+        return calendar.getTimeInMillis();
+    }
+
+    String recurrenceLabel() {
+        if (!repeatsReminder()) {
+            return "Does not repeat";
+        }
+        String unit = repeatUnitLabel(reminderRepeatUnit, reminderRepeatEvery);
+        return "Every " + reminderRepeatEvery + " " + unit;
+    }
+
+    static String normalizeRepeatUnit(String value) {
+        if (REPEAT_DAY.equals(value) || "daily".equals(value)) {
+            return REPEAT_DAY;
+        }
+        if (REPEAT_WEEK.equals(value) || "weekly".equals(value)) {
+            return REPEAT_WEEK;
+        }
+        if (REPEAT_MONTH.equals(value) || "monthly".equals(value)) {
+            return REPEAT_MONTH;
+        }
+        return REPEAT_NONE;
     }
 
     private static int impactValue(String impact) {
@@ -95,5 +147,25 @@ final class TodoTask {
             return 20;
         }
         return 10;
+    }
+
+    private static int repeatCalendarField(String unit) {
+        if (REPEAT_MONTH.equals(unit)) {
+            return Calendar.MONTH;
+        }
+        if (REPEAT_WEEK.equals(unit)) {
+            return Calendar.WEEK_OF_YEAR;
+        }
+        return Calendar.DAY_OF_YEAR;
+    }
+
+    private static String repeatUnitLabel(String unit, int every) {
+        if (REPEAT_MONTH.equals(unit)) {
+            return every == 1 ? "month" : "months";
+        }
+        if (REPEAT_WEEK.equals(unit)) {
+            return every == 1 ? "week" : "weeks";
+        }
+        return every == 1 ? "day" : "days";
     }
 }

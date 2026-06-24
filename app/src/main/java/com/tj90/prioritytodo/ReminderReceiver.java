@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
+import java.util.List;
+
 public final class ReminderReceiver extends BroadcastReceiver {
     static final String EXTRA_TASK_ID = "task_id";
     static final String EXTRA_TASK_TITLE = "task_title";
@@ -20,15 +22,18 @@ public final class ReminderReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
+        String id = intent.getStringExtra(EXTRA_TASK_ID);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
+            rescheduleRecurringReminder(context, id);
             return;
         }
 
         NotificationManager manager =
                 (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) {
+            rescheduleRecurringReminder(context, id);
             return;
         }
         createChannel(context, manager);
@@ -64,9 +69,9 @@ public final class ReminderReceiver extends BroadcastReceiver {
                 .setPriority(Notification.PRIORITY_HIGH)
                 .build();
 
-        String id = intent.getStringExtra(EXTRA_TASK_ID);
         int notificationId = id == null ? 0 : id.hashCode();
         manager.notify(notificationId, notification);
+        rescheduleRecurringReminder(context, id);
     }
 
     static void createChannel(Context context, NotificationManager manager) {
@@ -80,5 +85,27 @@ public final class ReminderReceiver extends BroadcastReceiver {
         );
         channel.setDescription("Date and time reminders for priority tasks");
         manager.createNotificationChannel(channel);
+    }
+
+    private void rescheduleRecurringReminder(Context context, String taskId) {
+        if (taskId == null) {
+            return;
+        }
+
+        TaskStore store = new TaskStore(context);
+        List<TodoTask> tasks = store.load();
+        for (TodoTask task : tasks) {
+            if (!taskId.equals(task.id) || task.completed || !task.repeatsReminder()) {
+                continue;
+            }
+
+            long nextReminder = task.nextReminderAfter(System.currentTimeMillis());
+            if (nextReminder > 0) {
+                task.reminderAt = nextReminder;
+                store.save(tasks);
+                ReminderScheduler.schedule(context, task);
+            }
+            return;
+        }
     }
 }
