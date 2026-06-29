@@ -47,7 +47,7 @@ jobs:
 
   smoke:
     name: Emulator smoke screenshots
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     needs: build
     timeout-minutes: 45
 
