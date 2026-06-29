@@ -85,7 +85,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            set -euxo pipefail
+            set -eux
             mkdir -p app/build/verification-screenshots
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell settings put system font_scale 1.3
