@@ -83,12 +83,15 @@ jobs:
           arch: x86_64
           profile: pixel_2
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          disable-animations: true
+          disable-animations: false
           script: |
             set -eux
             mkdir -p app/build/verification-screenshots
             adb wait-for-device
-            until adb shell cmd package list packages >/dev/null 2>&1; do
+            until adb shell service check package | grep -q found; do
+              sleep 5
+            done
+            until adb shell service check settings | grep -q found; do
               sleep 5
             done
             install_ok=0
