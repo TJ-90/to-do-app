@@ -2,6 +2,7 @@ package com.tj90.prioritytodo;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.app.NotificationManager;
 import android.app.TimePickerDialog;
@@ -50,6 +51,7 @@ public final class MainActivity extends Activity {
     private final List<TodoTask> tasks = new ArrayList<>();
 
     private TaskStore store;
+    private TextView formTitleView;
     private EditText titleInput;
     private EditText notesInput;
     private RadioGroup impactGroup;
@@ -61,7 +63,10 @@ public final class MainActivity extends Activity {
     private EditText repeatEveryInput;
     private Spinner repeatUnitSpinner;
     private TextView recurrenceHint;
+    private LinearLayout detailsSection;
+    private Button detailsToggleButton;
     private Button saveButton;
+    private Button resetButton;
     private LinearLayout mitCard;
     private TextView mitKickerView;
     private TextView mitTitleView;
@@ -70,6 +75,7 @@ public final class MainActivity extends Activity {
     private long selectedReminderAt;
     private String editingId;
     private boolean nightMode;
+    private boolean detailsExpanded;
     private Palette palette;
 
     @Override
@@ -93,31 +99,22 @@ public final class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(nightMode ? 0
                 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
 
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(palette.background);
+        LinearLayout screen = vertical();
+        screen.setBackgroundColor(palette.background);
 
-        LinearLayout root = vertical();
-        root.setPadding(dp(24), dp(24), dp(24), dp(36));
-        root.setBackgroundColor(palette.background);
-        scrollView.addView(root);
+        LinearLayout topInfo = vertical();
+        topInfo.setPadding(dp(24), dp(24), dp(24), dp(14));
+        topInfo.setBackgroundColor(palette.background);
 
-        LinearLayout headerRow = horizontal();
         LinearLayout headerCopy = vertical();
         TextView header = text("Priority Todo", 31, true);
         header.setTextColor(palette.primaryText);
         header.setIncludeFontPadding(false);
-        TextView subhead = text("Score-ranked MITs with reminders", 15, false);
+        TextView subhead = text("See the MIT. Act from the thumb zone.", 15, false);
         subhead.setTextColor(palette.secondaryText);
         headerCopy.addView(header);
         headerCopy.addView(subhead, matchWrapMargins(0, 8, 0, 0));
-
-        Button modeButton = quietButton(nightMode ? "Day" : "Night");
-        modeButton.setOnClickListener(view -> toggleMode());
-        headerRow.addView(headerCopy, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        headerRow.addView(modeButton, wrapMargins(14, 0, 0, 0));
-        root.addView(headerRow);
+        topInfo.addView(headerCopy);
 
         mitCard = vertical();
         mitCard.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -131,50 +128,79 @@ public final class MainActivity extends Activity {
         mitCard.addView(mitKickerView);
         mitCard.addView(mitTitleView, matchWrapMargins(0, 9, 0, 0));
         mitCard.addView(mitMetaView, matchWrapMargins(0, 8, 0, 0));
-        root.addView(mitCard, matchWrapMargins(0, 24, 0, 24));
+        topInfo.addView(mitCard, matchWrapMargins(0, 18, 0, 0));
+        screen.addView(topInfo, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(false);
+        scrollView.setBackgroundColor(palette.background);
+
+        LinearLayout content = vertical();
+        content.setPadding(dp(24), dp(10), dp(24), dp(20));
+        content.setBackgroundColor(palette.background);
+        scrollView.addView(content, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT));
 
         LinearLayout form = vertical();
         form.setPadding(dp(16), dp(18), dp(16), dp(18));
         form.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-        root.addView(form, matchWrapMargins(0, 0, 0, 28));
+        content.addView(form, matchWrapMargins(0, 0, 0, 24));
 
-        TextView formTitle = text("New task", 18, true);
-        formTitle.setTextColor(palette.primaryText);
-        form.addView(formTitle);
+        formTitleView = text(editingId == null ? "Quick add" : "Edit task", 18, true);
+        formTitleView.setTextColor(palette.primaryText);
+        form.addView(formTitleView);
+
+        TextView quickHint = text("Type the task, then use the bottom button. Details are optional.", 13, false);
+        quickHint.setSingleLine(false);
+        quickHint.setTextColor(palette.secondaryText);
+        form.addView(quickHint, matchWrapMargins(0, 6, 0, 12));
 
         titleInput = input("Task name");
         titleInput.setSingleLine(true);
-        form.addView(titleInput, matchWrapMargins(0, 16, 0, 10));
+        form.addView(titleInput, matchWrapMargins(0, 0, 0, 12));
+
+        detailsToggleButton = quietButton(detailsExpanded ? "Hide details" : "Details");
+        detailsToggleButton.setOnClickListener(view -> {
+            detailsExpanded = !detailsExpanded;
+            updateDetailsVisibility();
+        });
+        form.addView(detailsToggleButton, matchWrapMargins(0, 0, 0, 0));
+
+        detailsSection = vertical();
+        form.addView(detailsSection, matchWrapMargins(0, 16, 0, 0));
 
         notesInput = input("Notes");
         notesInput.setMinLines(3);
         notesInput.setGravity(Gravity.TOP | Gravity.START);
         notesInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        form.addView(notesInput, matchWrapMargins(0, 0, 0, 18));
+        detailsSection.addView(notesInput, matchWrapMargins(0, 0, 0, 18));
 
-        form.addView(label("Impact"));
+        detailsSection.addView(label("Impact"));
         impactGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
-        form.addView(impactGroup, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(impactGroup, matchWrapMargins(0, 7, 0, 16));
 
-        form.addView(label("Effort"));
+        detailsSection.addView(label("Effort"));
         effortGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
         checkRadioByTag(effortGroup, TodoTask.MEDIUM);
-        form.addView(effortGroup, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(effortGroup, matchWrapMargins(0, 7, 0, 16));
 
-        form.addView(label("Dependency"));
+        detailsSection.addView(label("Dependency"));
         dependencySpinner = spinner(DEPENDENCIES);
-        form.addView(dependencySpinner, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(dependencySpinner, matchWrapMargins(0, 7, 0, 16));
 
         urgentInput = checkbox("Urgent (+1000)");
         quickInput = checkbox("Quick task");
-        form.addView(urgentInput);
-        form.addView(quickInput, matchWrapMargins(0, 2, 0, 14));
+        detailsSection.addView(urgentInput);
+        detailsSection.addView(quickInput, matchWrapMargins(0, 2, 0, 14));
 
-        form.addView(label("Reminder"));
+        detailsSection.addView(label("Reminder"));
         reminderLabel = text("No reminder", 14, false);
         reminderLabel.setSingleLine(false);
-        form.addView(reminderLabel, matchWrapMargins(0, 8, 0, 10));
+        detailsSection.addView(reminderLabel, matchWrapMargins(0, 8, 0, 10));
 
         LinearLayout reminderButtons = horizontal();
         Button reminderButton = button("Pick time");
@@ -186,9 +212,9 @@ public final class MainActivity extends Activity {
         });
         addWeightedButton(reminderButtons, reminderButton, 0);
         addWeightedButton(reminderButtons, clearReminderButton, 10);
-        form.addView(reminderButtons, matchWrapMargins(0, 0, 0, 16));
+        detailsSection.addView(reminderButtons, matchWrapMargins(0, 0, 0, 16));
 
-        form.addView(label("Repeat reminder"));
+        detailsSection.addView(label("Repeat reminder"));
         LinearLayout recurrenceRow = horizontal();
         TextView everyLabel = text("Every", 14, false);
         everyLabel.setTextColor(palette.secondaryText);
@@ -213,29 +239,43 @@ public final class MainActivity extends Activity {
         recurrenceRow.addView(repeatEveryInput, new LinearLayout.LayoutParams(dp(72),
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         recurrenceRow.addView(repeatUnitSpinner, weightedMargins(1, 10, 0, 0, 0));
-        form.addView(recurrenceRow, matchWrapMargins(0, 7, 0, 7));
+        detailsSection.addView(recurrenceRow, matchWrapMargins(0, 7, 0, 7));
 
         recurrenceHint = text("One-time reminder.", 12, false);
         recurrenceHint.setSingleLine(false);
-        form.addView(recurrenceHint, matchWrapMargins(0, 0, 0, 18));
-
-        LinearLayout actionRow = horizontal();
-        saveButton = button("Add task");
-        saveButton.setOnClickListener(view -> saveTaskFromForm());
-        Button resetButton = quietButton("Reset");
-        resetButton.setOnClickListener(view -> resetForm());
-        addWeightedButton(actionRow, saveButton, 0);
-        addWeightedButton(actionRow, resetButton, 10);
-        form.addView(actionRow);
+        detailsSection.addView(recurrenceHint, matchWrapMargins(0, 0, 0, 0));
 
         TextView listTitle = text("Priority index", 22, true);
         listTitle.setTextColor(palette.primaryText);
-        root.addView(listTitle);
+        content.addView(listTitle);
         taskList = vertical();
-        root.addView(taskList, matchWrapMargins(0, 10, 0, 0));
+        content.addView(taskList, matchWrapMargins(0, 10, 0, 24));
 
-        setContentView(scrollView);
+        Button modeButton = quietButton(nightMode ? "Switch to day" : "Switch to night");
+        modeButton.setOnClickListener(view -> toggleMode());
+        content.addView(modeButton, matchWrapMargins(0, 0, 0, 0));
+
+        screen.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1));
+
+        LinearLayout bottomBar = horizontal();
+        bottomBar.setPadding(dp(16), dp(10), dp(16), dp(16));
+        bottomBar.setBackground(roundedBackground(palette.surface, palette.divider, 0));
+        saveButton = button(editingId == null ? "Add task" : "Update task");
+        saveButton.setOnClickListener(view -> saveTaskFromForm());
+        resetButton = quietButton(editingId == null ? "Reset" : "Cancel");
+        resetButton.setOnClickListener(view -> resetForm());
+        addWeightedButton(bottomBar, saveButton, 0);
+        addWeightedButton(bottomBar, resetButton, 10);
+        screen.addView(bottomBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        setContentView(screen);
         updateReminderLabel();
+        updateDetailsVisibility();
     }
 
     private void saveTaskFromForm() {
@@ -248,15 +288,18 @@ public final class MainActivity extends Activity {
         String repeatUnit = selectedRepeatUnit();
         int repeatEvery = repeatEveryFromInput();
         if (!TodoTask.REPEAT_NONE.equals(repeatUnit) && repeatEvery < 1) {
+            revealDetailsForError(repeatEveryInput);
             repeatEveryInput.setError("Use 1 or more");
             return;
         }
         if (!TodoTask.REPEAT_NONE.equals(repeatUnit) && selectedReminderAt == 0) {
+            revealDetailsForError(reminderLabel);
             reminderLabel.setText("Pick a first reminder time before enabling repeat.");
             reminderLabel.setTextColor(RED);
             return;
         }
         if (selectedReminderAt > 0 && selectedReminderAt <= System.currentTimeMillis()) {
+            revealDetailsForError(reminderLabel);
             reminderLabel.setText("Choose a future reminder time.");
             reminderLabel.setTextColor(RED);
             return;
@@ -352,7 +395,6 @@ public final class MainActivity extends Activity {
             row.addView(text(reminderText, 13, false), matchWrapMargins(0, 8, 0, 0));
         }
 
-        LinearLayout actions = horizontal();
         Button complete = button(task.completed ? "Restore" : "Complete");
         complete.setOnClickListener(view -> {
             task.completed = !task.completed;
@@ -363,21 +405,18 @@ public final class MainActivity extends Activity {
             }
             saveAndRender();
         });
+        row.addView(complete, matchWrapMargins(0, 13, 0, 0));
 
+        LinearLayout secondaryActions = horizontal();
         Button edit = quietButton("Edit");
         edit.setOnClickListener(view -> editTask(task));
 
         Button delete = quietButton("Delete");
-        delete.setOnClickListener(view -> {
-            ReminderScheduler.cancel(this, task);
-            tasks.remove(task);
-            saveAndRender();
-        });
+        delete.setOnClickListener(view -> confirmDelete(task));
 
-        addWeightedButton(actions, complete, 0);
-        addWeightedButton(actions, edit, 8);
-        addWeightedButton(actions, delete, 8);
-        row.addView(actions, matchWrapMargins(0, 13, 0, 0));
+        addWeightedButton(secondaryActions, edit, 0);
+        addWeightedButton(secondaryActions, delete, 12);
+        row.addView(secondaryActions, matchWrapMargins(0, 10, 0, 0));
         return row;
     }
 
@@ -405,8 +444,16 @@ public final class MainActivity extends Activity {
         selectedReminderAt = task.reminderAt;
         repeatEveryInput.setText(String.valueOf(Math.max(1, task.reminderRepeatEvery)));
         repeatUnitSpinner.setSelection(indexOfRepeatUnit(task.reminderRepeatUnit));
+        detailsExpanded = true;
         updateReminderLabel();
+        updateDetailsVisibility();
+        if (formTitleView != null) {
+            formTitleView.setText("Edit task");
+        }
         saveButton.setText("Update task");
+        if (resetButton != null) {
+            resetButton.setText("Cancel");
+        }
         titleInput.requestFocus();
     }
 
@@ -422,8 +469,45 @@ public final class MainActivity extends Activity {
         selectedReminderAt = 0;
         repeatEveryInput.setText("1");
         repeatUnitSpinner.setSelection(0);
+        detailsExpanded = false;
         updateReminderLabel();
+        updateDetailsVisibility();
+        if (formTitleView != null) {
+            formTitleView.setText("Quick add");
+        }
         saveButton.setText("Add task");
+        if (resetButton != null) {
+            resetButton.setText("Reset");
+        }
+    }
+
+    private void updateDetailsVisibility() {
+        if (detailsSection == null || detailsToggleButton == null) {
+            return;
+        }
+        detailsSection.setVisibility(detailsExpanded ? View.VISIBLE : View.GONE);
+        detailsToggleButton.setText(detailsExpanded ? "Hide details" : "Details");
+    }
+
+    private void revealDetailsForError(View target) {
+        detailsExpanded = true;
+        updateDetailsVisibility();
+        if (target != null) {
+            target.requestFocus();
+        }
+    }
+
+    private void confirmDelete(TodoTask task) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete task?")
+                .setMessage("This removes \"" + task.title + "\" from your priority index.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (dialog, which) -> {
+                    ReminderScheduler.cancel(this, task);
+                    tasks.remove(task);
+                    saveAndRender();
+                })
+                .show();
     }
 
     private void pickReminder() {
@@ -587,7 +671,7 @@ public final class MainActivity extends Activity {
         button.setTextColor(palette.primaryText);
         button.setTag(value);
         button.setId(View.generateViewId());
-        button.setMinHeight(dp(42));
+        button.setMinHeight(dp(48));
         button.setMinWidth(0);
         button.setPadding(0, 0, 0, 0);
         return button;
@@ -684,7 +768,7 @@ public final class MainActivity extends Activity {
         checkBox.setText(text);
         checkBox.setTextSize(14);
         checkBox.setTextColor(palette.primaryText);
-        checkBox.setMinHeight(dp(42));
+        checkBox.setMinHeight(dp(48));
         return checkBox;
     }
 
@@ -715,7 +799,7 @@ public final class MainActivity extends Activity {
         TextView view = text(value == null ? "" : value, 15, false);
         view.setTextColor(dropDown ? 0xFF000000 : palette.primaryText);
         view.setGravity(Gravity.CENTER_VERTICAL);
-        view.setMinHeight(dp(44));
+        view.setMinHeight(dp(48));
         view.setPadding(dp(10), 0, dp(10), 0);
         return view;
     }
@@ -759,10 +843,10 @@ public final class MainActivity extends Activity {
         button.setText(text);
         button.setAllCaps(false);
         button.setTextSize(14);
-        button.setMinHeight(dp(44));
-        button.setMinimumHeight(0);
-        button.setMinWidth(0);
-        button.setMinimumWidth(0);
+        button.setMinHeight(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setMinWidth(dp(48));
+        button.setMinimumWidth(dp(48));
         button.setPadding(dp(14), 0, dp(14), 0);
         button.setSingleLine(true);
         button.setEllipsize(TextUtils.TruncateAt.END);

@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/**]
   pull_request:
   workflow_dispatch:
 
@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
@@ -31,7 +31,7 @@ jobs:
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
 
@@ -39,8 +39,109 @@ jobs:
         run: gradle --no-daemon testDebugUnitTest assembleDebug
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: priority-todo-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  smoke:
+    name: Emulator smoke screenshots
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Build APK for smoke test
+        run: gradle --no-daemon assembleDebug
+
+      - name: Run launch, large-font, and keyboard checks
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -euxo pipefail
+            mkdir -p app/build/verification-screenshots
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell settings put system font_scale 1.3
+            adb shell wm size 720x1280
+            adb shell wm density 320
+            adb shell am start -W -n com.tj90.prioritytodo/.MainActivity
+            sleep 3
+            adb exec-out screencap -p > app/build/verification-screenshots/01-launch-large-font.png
+            adb shell uiautomator dump /sdcard/window-launch.xml
+            adb pull /sdcard/window-launch.xml app/build/verification-screenshots/window-launch.xml
+            python3 - <<'PY'
+            import re
+            import xml.etree.ElementTree as ET
+
+            def center(bounds):
+                x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+                return (x1 + x2) // 2, (y1 + y2) // 2
+
+            root = ET.parse("app/build/verification-screenshots/window-launch.xml").getroot()
+            edit = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.EditText")
+            x, y = center(edit.attrib["bounds"])
+            with open("app/build/verification-screenshots/title-input-center.txt", "w") as f:
+                f.write(f"{x} {y}\n")
+            PY
+            read title_x title_y < app/build/verification-screenshots/title-input-center.txt
+            adb shell input tap "$title_x" "$title_y"
+            sleep 2
+            adb exec-out screencap -p > app/build/verification-screenshots/02-keyboard-compact-height.png
+            adb shell uiautomator dump /sdcard/window-keyboard.xml
+            adb pull /sdcard/window-keyboard.xml app/build/verification-screenshots/window-keyboard.xml
+            adb shell input text CI_task
+            python3 - <<'PY'
+            import re
+            import xml.etree.ElementTree as ET
+
+            def center(bounds):
+                x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+                return (x1 + x2) // 2, (y1 + y2) // 2
+
+            root = ET.parse("app/build/verification-screenshots/window-keyboard.xml").getroot()
+            add = next(node for node in root.iter("node") if node.attrib.get("text") == "Add task")
+            x, y = center(add.attrib["bounds"])
+            with open("app/build/verification-screenshots/add-button-center.txt", "w") as f:
+                f.write(f"{x} {y}\n")
+            PY
+            read add_x add_y < app/build/verification-screenshots/add-button-center.txt
+            adb shell input tap "$add_x" "$add_y"
+            sleep 1
+            adb exec-out screencap -p > app/build/verification-screenshots/03-after-add.png
+            adb shell settings put system font_scale 1.0
+            adb shell wm size reset
+            adb shell wm density reset
+
+      - name: Upload smoke screenshots and UI dumps
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-todo-smoke-screenshots
+          path: app/build/verification-screenshots/*
           if-no-files-found: error
