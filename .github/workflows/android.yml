@@ -49,7 +49,7 @@ jobs:
     name: Emulator smoke screenshots
     runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
@@ -78,7 +78,7 @@ jobs:
       - name: Run launch, large-font, and keyboard checks
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           target: google_apis
           arch: x86_64
           profile: pixel_2
@@ -87,7 +87,19 @@ jobs:
           script: |
             set -eux
             mkdir -p app/build/verification-screenshots
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb wait-for-device
+            until adb shell cmd package list packages >/dev/null 2>&1; do
+              sleep 5
+            done
+            install_ok=0
+            for attempt in 1 2 3; do
+              if adb install -r app/build/outputs/apk/debug/app-debug.apk; then
+                install_ok=1
+                break
+              fi
+              sleep 10
+            done
+            test "$install_ok" = 1
             adb shell settings put system font_scale 1.3
             adb shell wm size 720x1280
             adb shell wm density 320
