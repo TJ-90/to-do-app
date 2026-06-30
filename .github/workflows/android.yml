@@ -47,7 +47,7 @@ jobs:
 
   smoke:
     name: Emulator smoke screenshots
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 45
 
@@ -72,6 +72,12 @@ jobs:
         with:
           gradle-version: "9.4.1"
 
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Build APK for smoke test
         run: gradle --no-daemon assembleDebug
 
@@ -80,10 +86,10 @@ jobs:
         with:
           api-level: 30
           target: google_apis
-          arch: arm64-v8a
+          arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
           script: |
             sh .github/scripts/android-smoke.sh
 
