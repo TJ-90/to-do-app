@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -76,6 +77,7 @@ public final class MainActivity extends Activity {
     private String editingId;
     private boolean nightMode;
     private boolean detailsExpanded;
+    private boolean formOpen;
     private Palette palette;
 
     @Override
@@ -144,58 +146,113 @@ public final class MainActivity extends Activity {
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
 
+        TextView listTitle = text("Priority index", 22, true);
+        listTitle.setTextColor(palette.primaryText);
+        content.addView(listTitle);
+        taskList = vertical();
+        content.addView(taskList, matchWrapMargins(0, 10, 0, 24));
+
+        Button modeButton = quietButton(nightMode ? "Switch to day" : "Switch to night");
+        modeButton.setOnClickListener(view -> toggleMode());
+        content.addView(modeButton, matchWrapMargins(0, 0, 0, 0));
+
+        screen.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1));
+
+        if (formOpen) {
+            screen.addView(formPanel(), new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+
+        LinearLayout bottomBar = horizontal();
+        bottomBar.setPadding(dp(16), dp(10), dp(16), dp(16));
+        bottomBar.setBackground(roundedBackground(palette.surface, palette.divider, 0));
+        if (formOpen) {
+            saveButton = button(editingId == null ? "Add task" : "Update task");
+            saveButton.setOnClickListener(view -> saveTaskFromForm());
+            resetButton = quietButton("Cancel");
+            resetButton.setOnClickListener(view -> resetForm());
+            addWeightedButton(bottomBar, saveButton, 0);
+            addWeightedButton(bottomBar, resetButton, 10);
+        } else {
+            saveButton = button("+ Add");
+            saveButton.setOnClickListener(view -> openAddPanel());
+            addWeightedButton(bottomBar, saveButton, 0);
+            resetButton = null;
+        }
+        screen.addView(bottomBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        setContentView(screen);
+        updateReminderLabel();
+        updateDetailsVisibility();
+    }
+
+    private LinearLayout formPanel() {
         LinearLayout form = vertical();
-        form.setPadding(dp(16), dp(18), dp(16), dp(18));
-        form.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-        content.addView(form, matchWrapMargins(0, 0, 0, 24));
+        form.setPadding(dp(24), dp(10), dp(24), dp(10));
+        form.setBackground(roundedBackground(palette.background, palette.divider, 0));
 
-        formTitleView = text(editingId == null ? "Quick add" : "Edit task", 18, true);
+        LinearLayout card = vertical();
+        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        card.setBackground(roundedBackground(palette.surface, palette.divider, 8));
+        form.addView(card, matchWrapMargins(0, 0, 0, 0));
+
+        formTitleView = text(editingId == null ? "Add a task" : "Edit task", 18, true);
         formTitleView.setTextColor(palette.primaryText);
-        form.addView(formTitleView);
+        card.addView(formTitleView);
 
-        TextView quickHint = text("Type the task, then use the bottom button. Details are optional.", 13, false);
+        TextView quickHint = text("Title first. Details are optional.", 13, false);
         quickHint.setSingleLine(false);
         quickHint.setTextColor(palette.secondaryText);
-        form.addView(quickHint, matchWrapMargins(0, 6, 0, 12));
+        card.addView(quickHint, matchWrapMargins(0, 5, 0, 10));
 
         titleInput = input("Task name");
         titleInput.setSingleLine(true);
-        form.addView(titleInput, matchWrapMargins(0, 0, 0, 12));
+        card.addView(titleInput, matchWrapMargins(0, 0, 0, 10));
+
+        TextView defaults = text("High impact · Medium effort · Not urgent", 12, false);
+        defaults.setTextColor(palette.secondaryText);
+        card.addView(defaults, matchWrapMargins(0, 0, 0, 8));
 
         detailsToggleButton = quietButton(detailsExpanded ? "Hide details" : "Details");
         detailsToggleButton.setOnClickListener(view -> {
             detailsExpanded = !detailsExpanded;
             updateDetailsVisibility();
         });
-        form.addView(detailsToggleButton, matchWrapMargins(0, 0, 0, 0));
+        card.addView(detailsToggleButton, matchWrapMargins(0, 0, 0, 0));
 
         detailsSection = vertical();
-        form.addView(detailsSection, matchWrapMargins(0, 16, 0, 0));
+        card.addView(detailsSection, matchWrapMargins(0, 14, 0, 0));
 
         notesInput = input("Notes");
         notesInput.setMinLines(3);
         notesInput.setGravity(Gravity.TOP | Gravity.START);
         notesInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        detailsSection.addView(notesInput, matchWrapMargins(0, 0, 0, 18));
+        detailsSection.addView(notesInput, matchWrapMargins(0, 0, 0, 16));
 
         detailsSection.addView(label("Impact"));
         impactGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
-        detailsSection.addView(impactGroup, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(impactGroup, matchWrapMargins(0, 6, 0, 14));
 
         detailsSection.addView(label("Effort"));
         effortGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
         checkRadioByTag(effortGroup, TodoTask.MEDIUM);
-        detailsSection.addView(effortGroup, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(effortGroup, matchWrapMargins(0, 6, 0, 14));
 
         detailsSection.addView(label("Dependency"));
         dependencySpinner = spinner(DEPENDENCIES);
-        detailsSection.addView(dependencySpinner, matchWrapMargins(0, 7, 0, 16));
+        detailsSection.addView(dependencySpinner, matchWrapMargins(0, 6, 0, 14));
 
         urgentInput = checkbox("Urgent (+1000)");
         quickInput = checkbox("Quick task");
         detailsSection.addView(urgentInput);
-        detailsSection.addView(quickInput, matchWrapMargins(0, 2, 0, 14));
+        detailsSection.addView(quickInput, matchWrapMargins(0, 2, 0, 12));
 
         detailsSection.addView(label("Reminder"));
         reminderLabel = text("No reminder", 14, false);
@@ -212,7 +269,7 @@ public final class MainActivity extends Activity {
         });
         addWeightedButton(reminderButtons, reminderButton, 0);
         addWeightedButton(reminderButtons, clearReminderButton, 10);
-        detailsSection.addView(reminderButtons, matchWrapMargins(0, 0, 0, 16));
+        detailsSection.addView(reminderButtons, matchWrapMargins(0, 0, 0, 14));
 
         detailsSection.addView(label("Repeat reminder"));
         LinearLayout recurrenceRow = horizontal();
@@ -239,43 +296,17 @@ public final class MainActivity extends Activity {
         recurrenceRow.addView(repeatEveryInput, new LinearLayout.LayoutParams(dp(72),
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         recurrenceRow.addView(repeatUnitSpinner, weightedMargins(1, 10, 0, 0, 0));
-        detailsSection.addView(recurrenceRow, matchWrapMargins(0, 7, 0, 7));
+        detailsSection.addView(recurrenceRow, matchWrapMargins(0, 6, 0, 7));
 
         recurrenceHint = text("One-time reminder.", 12, false);
         recurrenceHint.setSingleLine(false);
         detailsSection.addView(recurrenceHint, matchWrapMargins(0, 0, 0, 0));
 
-        TextView listTitle = text("Priority index", 22, true);
-        listTitle.setTextColor(palette.primaryText);
-        content.addView(listTitle);
-        taskList = vertical();
-        content.addView(taskList, matchWrapMargins(0, 10, 0, 24));
-
-        Button modeButton = quietButton(nightMode ? "Switch to day" : "Switch to night");
-        modeButton.setOnClickListener(view -> toggleMode());
-        content.addView(modeButton, matchWrapMargins(0, 0, 0, 0));
-
-        screen.addView(scrollView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1));
-
-        LinearLayout bottomBar = horizontal();
-        bottomBar.setPadding(dp(16), dp(10), dp(16), dp(16));
-        bottomBar.setBackground(roundedBackground(palette.surface, palette.divider, 0));
-        saveButton = button(editingId == null ? "Add task" : "Update task");
-        saveButton.setOnClickListener(view -> saveTaskFromForm());
-        resetButton = quietButton(editingId == null ? "Reset" : "Cancel");
-        resetButton.setOnClickListener(view -> resetForm());
-        addWeightedButton(bottomBar, saveButton, 0);
-        addWeightedButton(bottomBar, resetButton, 10);
-        screen.addView(bottomBar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        setContentView(screen);
-        updateReminderLabel();
-        updateDetailsVisibility();
+        TodoTask editingTask = editingId == null ? null : findTask(editingId);
+        if (editingTask != null) {
+            populateForm(editingTask);
+        }
+        return form;
     }
 
     private void saveTaskFromForm() {
@@ -327,7 +358,8 @@ public final class MainActivity extends Activity {
         }
 
         ReminderScheduler.schedule(this, task);
-        saveAndRender();
+        sortTasks();
+        store.save(tasks);
         resetForm();
     }
 
@@ -344,12 +376,12 @@ public final class MainActivity extends Activity {
             mitTitleView.setText("No primary MIT");
             mitMetaView.setText("Add a task to start today's index.");
         } else {
-            mitCard.setBackground(roundedBackground(RED, RED, 8));
-            mitKickerView.setTextColor(0xFFFFFFFF);
-            mitTitleView.setTextColor(0xFFFFFFFF);
-            mitMetaView.setTextColor(0xFFF6D9DC);
+            mitCard.setBackground(roundedBackground(palette.surface, palette.divider, 8));
+            mitKickerView.setTextColor(RED);
+            mitTitleView.setTextColor(palette.primaryText);
+            mitMetaView.setTextColor(palette.secondaryText);
             mitTitleView.setText(mit.title);
-            mitMetaView.setText("Score " + mit.scoreLabel() + " - " + mit.bucket());
+            mitMetaView.setText("Score " + mit.scoreLabel() + " · " + mit.bucket());
         }
 
         if (tasks.isEmpty()) {
@@ -367,21 +399,34 @@ public final class MainActivity extends Activity {
 
     private LinearLayout taskRow(TodoTask task) {
         LinearLayout row = vertical();
-        row.setPadding(dp(16), dp(15), dp(16), dp(15));
+        row.setPadding(dp(14), dp(13), dp(14), dp(13));
         row.setBackground(rowBackground(task.completed));
 
-        TextView title = text(task.title + (task.completed ? " [done]" : ""), 17, true);
+        LinearLayout titleRow = horizontal();
+        CheckBox completeToggle = checkbox("");
+        completeToggle.setChecked(task.completed);
+        completeToggle.setContentDescription((task.completed ? "Restore " : "Complete ") + task.title);
+        completeToggle.setOnClickListener(view -> toggleTaskCompleted(task));
+        titleRow.addView(completeToggle, wrapMargins(0, 0, 10, 0));
+
+        LinearLayout copy = vertical();
+        TextView title = text(task.title, 17, true);
         title.setTextColor(task.completed ? palette.secondaryText : palette.primaryText);
+        if (task.completed) {
+            title.setPaintFlags(title.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+        }
         title.setSingleLine(false);
         title.setMaxLines(3);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        row.addView(title);
+        copy.addView(title);
 
-        TextView score = text("Score " + task.scoreLabel() + " - " + task.bucket(), 13, true);
-        score.setTextColor(RED);
-        row.addView(score, matchWrapMargins(0, 7, 0, 0));
+        TextView score = text("Score " + task.scoreLabel() + " · " + task.bucket(), 13, true);
+        score.setTextColor(task.urgent && !task.completed ? RED : palette.secondaryText);
+        copy.addView(score, matchWrapMargins(0, 5, 0, 0));
+        titleRow.addView(copy, weightedMargins(1, 0, 0, 0, 0));
+        row.addView(titleRow);
 
-        row.addView(text(taskDetails(task), 13, false), matchWrapMargins(0, 6, 0, 0));
+        row.addView(text(taskDetails(task), 13, false), matchWrapMargins(0, 7, 0, 0));
         if (!task.notes.isEmpty()) {
             TextView notes = text(task.notes, 13, false);
             notes.setSingleLine(false);
@@ -390,22 +435,10 @@ public final class MainActivity extends Activity {
         if (task.reminderAt > 0) {
             String reminderText = "Reminder " + formatDateTime(task.reminderAt);
             if (task.repeatsReminder()) {
-                reminderText += " - " + task.recurrenceLabel();
+                reminderText += " · " + task.recurrenceLabel();
             }
             row.addView(text(reminderText, 13, false), matchWrapMargins(0, 8, 0, 0));
         }
-
-        Button complete = button(task.completed ? "Restore" : "Complete");
-        complete.setOnClickListener(view -> {
-            task.completed = !task.completed;
-            if (task.completed) {
-                ReminderScheduler.cancel(this, task);
-            } else {
-                ReminderScheduler.schedule(this, task);
-            }
-            saveAndRender();
-        });
-        row.addView(complete, matchWrapMargins(0, 13, 0, 0));
 
         LinearLayout secondaryActions = horizontal();
         Button edit = quietButton("Edit");
@@ -416,7 +449,7 @@ public final class MainActivity extends Activity {
 
         addWeightedButton(secondaryActions, edit, 0);
         addWeightedButton(secondaryActions, delete, 12);
-        row.addView(secondaryActions, matchWrapMargins(0, 10, 0, 0));
+        row.addView(secondaryActions, matchWrapMargins(0, 8, 0, 0));
         return row;
     }
 
@@ -432,8 +465,35 @@ public final class MainActivity extends Activity {
         return join(details, " / ");
     }
 
+    private void toggleTaskCompleted(TodoTask task) {
+        task.completed = !task.completed;
+        if (task.completed) {
+            ReminderScheduler.cancel(this, task);
+        } else {
+            ReminderScheduler.schedule(this, task);
+        }
+        saveAndRender();
+    }
+
+    private void openAddPanel() {
+        editingId = null;
+        selectedReminderAt = 0;
+        detailsExpanded = false;
+        formOpen = true;
+        buildUi();
+        renderTasks();
+    }
+
     private void editTask(TodoTask task) {
         editingId = task.id;
+        selectedReminderAt = task.reminderAt;
+        detailsExpanded = true;
+        formOpen = true;
+        buildUi();
+        renderTasks();
+    }
+
+    private void populateForm(TodoTask task) {
         titleInput.setText(task.title);
         notesInput.setText(task.notes);
         checkRadioByTag(impactGroup, task.impact);
@@ -444,41 +504,15 @@ public final class MainActivity extends Activity {
         selectedReminderAt = task.reminderAt;
         repeatEveryInput.setText(String.valueOf(Math.max(1, task.reminderRepeatEvery)));
         repeatUnitSpinner.setSelection(indexOfRepeatUnit(task.reminderRepeatUnit));
-        detailsExpanded = true;
-        updateReminderLabel();
-        updateDetailsVisibility();
-        if (formTitleView != null) {
-            formTitleView.setText("Edit task");
-        }
-        saveButton.setText("Update task");
-        if (resetButton != null) {
-            resetButton.setText("Cancel");
-        }
-        titleInput.requestFocus();
     }
 
     private void resetForm() {
         editingId = null;
-        titleInput.setText("");
-        notesInput.setText("");
-        checkRadioByTag(impactGroup, TodoTask.HIGH);
-        checkRadioByTag(effortGroup, TodoTask.MEDIUM);
-        dependencySpinner.setSelection(0);
-        urgentInput.setChecked(false);
-        quickInput.setChecked(false);
         selectedReminderAt = 0;
-        repeatEveryInput.setText("1");
-        repeatUnitSpinner.setSelection(0);
         detailsExpanded = false;
-        updateReminderLabel();
-        updateDetailsVisibility();
-        if (formTitleView != null) {
-            formTitleView.setText("Quick add");
-        }
-        saveButton.setText("Add task");
-        if (resetButton != null) {
-            resetButton.setText("Reset");
-        }
+        formOpen = false;
+        buildUi();
+        renderTasks();
     }
 
     private void updateDetailsVisibility() {
@@ -554,13 +588,13 @@ public final class MainActivity extends Activity {
 
         if (selectedReminderAt > 0) {
             reminderLabel.setText("First reminder: " + formatDateTime(selectedReminderAt));
-            reminderLabel.setTextColor(RED);
+            reminderLabel.setTextColor(palette.primaryText);
         } else {
             reminderLabel.setText("No reminder");
             reminderLabel.setTextColor(palette.secondaryText);
         }
 
-        if (recurrenceHint == null) {
+        if (recurrenceHint == null || repeatEveryInput == null) {
             return;
         }
         String repeatUnit = selectedRepeatUnit();
@@ -833,8 +867,8 @@ public final class MainActivity extends Activity {
 
     private Button quietButton(String text) {
         Button button = baseButton(text);
-        button.setTextColor(RED);
-        button.setBackground(buttonBackground(palette.surface, RED));
+        button.setTextColor(palette.secondaryText);
+        button.setBackground(buttonBackground(palette.surface, palette.divider));
         return button;
     }
 

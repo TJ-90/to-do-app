@@ -64,7 +64,7 @@
   - A fixed bottom bar improves reachability but reduces vertical content space; keep it capped to two controls.
 
 ## Visual language
-- Color: Existing black/white/grey with red for priority and dominant CTA.
+- Color: Existing black/white/grey with red reserved for the dominant CTA, urgent/immediate accents, validation errors, and small MIT emphasis.
 - Typography: Bold title/MIT, compact explanatory text, no long instruction blocks.
 - Spacing/layout rhythm: Clear separation between top info, scroll content, and bottom action. Generous spacing near destructive controls.
 - Shape/radius/elevation: Preserve simple rounded rectangles and subtle dividers.
@@ -84,7 +84,7 @@
 - Variants and states:
   - Add mode: bottom CTA = `Add task`.
   - Edit mode: bottom CTA = `Update task`; quiet secondary = `Cancel`/reset.
-  - Row mode: row primary = `Complete`/`Restore`; secondary = `Edit`; tertiary = `Delete` with confirmation.
+  - Row mode: row primary = checkbox complete/restore; secondary = `Edit`; tertiary = `Delete` with confirmation.
 - Token/component ownership: Keep token-like values in `MainActivity.Palette` and helper methods until a larger design-system extraction is warranted.
 
 ## Accessibility
@@ -112,7 +112,7 @@
 
 ## Content voice
 - Tone: Short, direct, plain.
-- Terminology: Use `MIT`, `Score`, `Details`, `Add task`, `Update task`, `Complete`, `Restore`.
+- Terminology: Use `MIT`, `Score`, `Details`, `+ Add`, `Add task`, `Update task`, and checkbox-based completion/restoration.
 - Microcopy rules:
   - Prefer verbs over explanations.
   - Do not make users read instructions to discover core actions.
@@ -131,3 +131,13 @@
 ## Open questions
 - [ ] Should future versions add a handedness preference, or is centered bottom action sufficient? / owner: product / impact: optional ergonomics refinement.
 - [ ] Should Delete use undo instead of confirmation after implementation evidence? / owner: product/engineering / impact: destructive-action speed vs safety.
+
+## 2026-06-30 Jony-inspired thumb-first refinement
+
+- Default home is list-first: the MIT and task list/empty state appear before any add/details form.
+- The fixed bottom dock owns the primary action. At rest it shows one `+ Add` affordance; when the add/edit panel is open it switches to one primary save/update action plus quiet `Cancel`.
+- Add/edit is an anchored panel above the dock, not a permanent form above the list. Title comes first; advanced fields stay behind `Details`.
+- Completion and restore use a checkbox in each task row. Do not reintroduce large `Complete` or `Restore` row buttons.
+- Visual restraint is now stricter: black/white/grey are the interface; red is reserved for the main confirmation CTA, urgent/immediate accent, validation errors, and small MIT emphasis.
+- The MIT card is neutral by default and must not be a full red block.
+- Delete remains quiet and confirmed; destructive emphasis belongs in the confirmation moment, not as an equal-weight card action.
