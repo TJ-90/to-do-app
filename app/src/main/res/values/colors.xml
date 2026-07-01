@@ -1,6 +1,6 @@
 <resources>
     <color name="window_background">#FFFFFF</color>
-    <color name="primary_text">#000000</color>
-    <color name="secondary_text">#9A9A9A</color>
-    <color name="accent">#C1121F</color>
+    <color name="primary_text">#1B1F2E</color>
+    <color name="secondary_text">#787E93</color>
+    <color name="accent">#3A3D49</color>
 </resources>

@@ -63,7 +63,7 @@ public final class ReminderReceiver extends BroadcastReceiver {
         Notification notification = builder
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(title)
-                .setContentText("Reminder due now. Score " + score + ".")
+                .setContentText("Reminder due now.")
                 .setContentIntent(contentIntent)
                 .setAutoCancel(true)
                 .setPriority(Notification.PRIORITY_HIGH)

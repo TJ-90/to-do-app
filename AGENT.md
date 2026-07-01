@@ -33,14 +33,12 @@ Do not change these constants or buckets unless the user explicitly changes the 
 
 ## UI Direction
 
-- Keep the interface restrained, simple, and functional.
-- Preserve manual day/night mode.
-- Main palette:
-  - Day background: white
-  - Day primary text: black
-  - Secondary text: light grey
-  - Accent/important text/buttons: red
-  - Night mode should invert the base surface while keeping red as the accent.
+- Keep the interface restrained, simple, and functional, optimized for one-handed (thumb-first) use.
+- Color encodes priority: Immediate = red (#E82729), Next week = amber (#DFA700), Someday = blue (#006CE5).
+- The primary action (FAB, commit button) uses the neutral dark accent (#3A3D49 day / #C8CBD6 night), NOT red.
+- Three-way theme: Day / Night / Auto (system). Handedness toggle mirrors the FAB position and swipe-to-complete direction.
+- Primary interactions: tap the row circle to complete (with confetti), swipe toward the thumb to complete, swipe away to send to Later, hold a row to edit. Add/edit happens in a bottom sheet.
+- Raw scores are never shown; surface the bucket word (Immediate / Next week / Someday) instead.
 - Avoid decorative gradients, oversized cards, and unnecessary visual clutter.
 - Prefer clear spacing, readable hierarchy, and direct controls.
 

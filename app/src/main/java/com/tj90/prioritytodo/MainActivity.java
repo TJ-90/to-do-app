@@ -9,27 +9,29 @@ import android.app.TimePickerDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.content.res.ColorStateList;
-import android.graphics.Paint;
+import android.content.res.Configuration;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -40,498 +42,1167 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class MainActivity extends Activity {
+    private static final String UI_PREFS = "priority_todo_ui";
+    private static final String LEGACY_NIGHT_MODE = "night_mode";
+    private static final String KEY_THEME = "theme";
+    private static final String KEY_HAND = "hand";
+
+    private static final String THEME_DAY = "day";
+    private static final String THEME_NIGHT = "night";
+    private static final String THEME_SYSTEM = "system";
+    private static final String HAND_RIGHT = "right";
+    private static final String HAND_LEFT = "left";
+
     private static final String[] DEPENDENCIES = {"None", "Sequential", "Reciprocal", "Pooled"};
     private static final String[] REPEAT_UNITS = {"No repeat", "Day", "Week", "Month"};
-    private static final String UI_PREFS = "priority_todo_ui";
-    private static final String NIGHT_MODE = "night_mode";
-    private static final int RED = 0xFFC1121F;
+
+    private static final int[] CONFETTI_COLORS = {
+            0xFF008135, 0xFF3D9C5E, 0xFF59AD73, 0xFF60C781, 0xFF9FE4B1, 0xFFFFFFFF
+    };
 
     private final List<TodoTask> tasks = new ArrayList<>();
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     private TaskStore store;
-    private TextView formTitleView;
-    private EditText titleInput;
-    private EditText notesInput;
-    private RadioGroup impactGroup;
-    private RadioGroup effortGroup;
-    private Spinner dependencySpinner;
-    private CheckBox urgentInput;
-    private CheckBox quickInput;
-    private TextView reminderLabel;
-    private EditText repeatEveryInput;
-    private Spinner repeatUnitSpinner;
-    private TextView recurrenceHint;
-    private LinearLayout detailsSection;
-    private Button detailsToggleButton;
-    private Button saveButton;
-    private Button resetButton;
-    private LinearLayout mitCard;
-    private TextView mitKickerView;
-    private TextView mitTitleView;
-    private TextView mitMetaView;
-    private LinearLayout taskList;
-    private long selectedReminderAt;
-    private String editingId;
-    private boolean nightMode;
+    private PriorityPalette palette;
+    private String theme = THEME_DAY;
+    private String hand = HAND_RIGHT;
+
+    private FrameLayout root;
+    private TextView headerSubView;
+    private TextView handPill;
+    private TextView themePill;
+    private View progressFill;
+    private TextView progressText;
+    private LinearLayout heroContainer;
+    private LinearLayout listContainer;
+    private View fab;
+    private View reachArc;
+
+    private final Map<String, Integer> rowTops = new HashMap<>();
+
+    private ConfettiView confettiView;
+
+    private View toastView;
+    private Runnable toastDismiss;
+    private String toastTaskId;
+    private String toastActionType;
+
+    private View cheerView;
+    private Runnable cheerDismiss;
+
+    // ---- sheet draft state ----
+    private boolean sheetOpen;
+    private String sheetMode = "add";
+    private String sheetEditId;
+    private String draftName = "";
+    private String draftImpact = TodoTask.LOW;
+    private String draftEffort = TodoTask.LOW;
+    private String draftDep = "None";
+    private boolean draftUrgent;
+    private boolean draftQuick = true;
+    private long draftReminderAt;
+    private String draftRepeatUnit = TodoTask.REPEAT_NONE;
+    private int draftRepeatEvery = 1;
     private boolean detailsExpanded;
-    private boolean formOpen;
-    private Palette palette;
+
+    private FrameLayout sheetOverlay;
+    private View sheetScrim;
+    private LinearLayout sheetPanel;
+    private EditText sheetInput;
+    private TextView landsPill;
+    private TextView detailsSummary;
+    private TextView detailsToggle;
+    private TextView remindChip;
+    private LinearLayout reminderRepeatRow;
+    private LinearLayout chipsContainer;
+    private TextView commitButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         store = new TaskStore(this);
-        nightMode = getSharedPreferences(UI_PREFS, MODE_PRIVATE).getBoolean(NIGHT_MODE, false);
-        palette = Palette.from(nightMode);
+        loadPrefs();
+        palette = activePalette();
         tasks.addAll(store.load());
         requestNotificationPermission();
         createNotificationChannel();
         rescheduleFutureReminders();
-        buildUi();
-        renderTasks();
+        buildChrome();
+        renderAll(false);
     }
 
-    private void buildUi() {
-        palette = Palette.from(nightMode);
-        getWindow().setStatusBarColor(palette.background);
-        getWindow().setNavigationBarColor(palette.background);
-        getWindow().getDecorView().setSystemUiVisibility(nightMode ? 0
-                : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    // ===================== prefs / theme =====================
 
-        LinearLayout screen = vertical();
-        screen.setBackgroundColor(palette.background);
-
-        LinearLayout topInfo = vertical();
-        topInfo.setPadding(dp(24), dp(24), dp(24), dp(14));
-        topInfo.setBackgroundColor(palette.background);
-
-        LinearLayout headerCopy = vertical();
-        TextView header = text("Priority Todo", 31, true);
-        header.setTextColor(palette.primaryText);
-        header.setIncludeFontPadding(false);
-        TextView subhead = text("See the MIT. Act from the thumb zone.", 15, false);
-        subhead.setTextColor(palette.secondaryText);
-        headerCopy.addView(header);
-        headerCopy.addView(subhead, matchWrapMargins(0, 8, 0, 0));
-        topInfo.addView(headerCopy);
-
-        mitCard = vertical();
-        mitCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        mitCard.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-        mitKickerView = text("Primary MIT", 12, true);
-        mitTitleView = text("", 18, true);
-        mitTitleView.setSingleLine(false);
-        mitTitleView.setMaxLines(3);
-        mitTitleView.setEllipsize(TextUtils.TruncateAt.END);
-        mitMetaView = text("", 13, false);
-        mitCard.addView(mitKickerView);
-        mitCard.addView(mitTitleView, matchWrapMargins(0, 9, 0, 0));
-        mitCard.addView(mitMetaView, matchWrapMargins(0, 8, 0, 0));
-        topInfo.addView(mitCard, matchWrapMargins(0, 18, 0, 0));
-        screen.addView(topInfo, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(false);
-        scrollView.setBackgroundColor(palette.background);
-
-        LinearLayout content = vertical();
-        content.setPadding(dp(24), dp(10), dp(24), dp(20));
-        content.setBackgroundColor(palette.background);
-        scrollView.addView(content, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT));
-
-        TextView listTitle = text("Priority index", 22, true);
-        listTitle.setTextColor(palette.primaryText);
-        content.addView(listTitle);
-        taskList = vertical();
-        content.addView(taskList, matchWrapMargins(0, 10, 0, 24));
-
-        Button modeButton = quietButton(nightMode ? "Switch to day" : "Switch to night");
-        modeButton.setOnClickListener(view -> toggleMode());
-        content.addView(modeButton, matchWrapMargins(0, 0, 0, 0));
-
-        screen.addView(scrollView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1));
-
-        if (formOpen) {
-            screen.addView(formPanel(), new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-        }
-
-        LinearLayout bottomBar = horizontal();
-        bottomBar.setPadding(dp(16), dp(10), dp(16), dp(16));
-        bottomBar.setBackground(roundedBackground(palette.surface, palette.divider, 0));
-        if (formOpen) {
-            saveButton = button(editingId == null ? "Add task" : "Update task");
-            saveButton.setOnClickListener(view -> saveTaskFromForm());
-            resetButton = quietButton("Cancel");
-            resetButton.setOnClickListener(view -> resetForm());
-            addWeightedButton(bottomBar, saveButton, 0);
-            addWeightedButton(bottomBar, resetButton, 10);
+    private void loadPrefs() {
+        SharedPreferences prefs = getSharedPreferences(UI_PREFS, MODE_PRIVATE);
+        if (prefs.contains(KEY_THEME)) {
+            theme = prefs.getString(KEY_THEME, THEME_DAY);
+        } else if (prefs.contains(LEGACY_NIGHT_MODE)) {
+            theme = prefs.getBoolean(LEGACY_NIGHT_MODE, false) ? THEME_NIGHT : THEME_DAY;
         } else {
-            saveButton = button("+ Add");
-            saveButton.setOnClickListener(view -> openAddPanel());
-            addWeightedButton(bottomBar, saveButton, 0);
-            resetButton = null;
+            theme = THEME_DAY;
         }
-        screen.addView(bottomBar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        setContentView(screen);
-        updateReminderLabel();
-        updateDetailsVisibility();
+        hand = prefs.getString(KEY_HAND, HAND_RIGHT);
     }
 
-    private LinearLayout formPanel() {
-        LinearLayout form = vertical();
-        form.setPadding(dp(24), dp(10), dp(24), dp(10));
-        form.setBackground(roundedBackground(palette.background, palette.divider, 0));
+    private void persistPrefs() {
+        getSharedPreferences(UI_PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_THEME, theme)
+                .putString(KEY_HAND, hand)
+                .apply();
+    }
 
+    private boolean isNightEffective() {
+        if (THEME_SYSTEM.equals(theme)) {
+            int mode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+            return mode == Configuration.UI_MODE_NIGHT_YES;
+        }
+        return THEME_NIGHT.equals(theme);
+    }
+
+    private PriorityPalette activePalette() {
+        return isNightEffective() ? PriorityPalette.night() : PriorityPalette.day();
+    }
+
+    private void cycleTheme() {
+        if (THEME_DAY.equals(theme)) {
+            theme = THEME_NIGHT;
+        } else if (THEME_NIGHT.equals(theme)) {
+            theme = THEME_SYSTEM;
+        } else {
+            theme = THEME_DAY;
+        }
+        persistPrefs();
+        palette = activePalette();
+        rebuildEverything();
+    }
+
+    private void toggleHand() {
+        hand = HAND_RIGHT.equals(hand) ? HAND_LEFT : HAND_RIGHT;
+        persistPrefs();
+        rebuildEverything();
+    }
+
+    private void rebuildEverything() {
+        boolean reopenSheet = sheetOpen;
+        if (sheetOpen) {
+            removeSheetImmediate();
+        }
+        buildChrome();
+        renderAll(false);
+        if (reopenSheet) {
+            presentSheet();
+        }
+    }
+
+    // ===================== chrome =====================
+
+    private void buildChrome() {
+        getWindow().setStatusBarColor(palette.bg);
+        getWindow().setNavigationBarColor(palette.bg);
+        int flags = isNightEffective() ? 0
+                : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+
+        root = new FrameLayout(this);
+        root.setBackgroundColor(palette.surface);
+
+        LinearLayout column = vertical();
+        column.setBackgroundColor(palette.surface);
+        FrameLayout.LayoutParams columnParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        root.addView(column, columnParams);
+
+        column.addView(buildHeader(), matchWrap(0, 0, 0, 0));
+        heroContainer = vertical();
+        column.addView(heroContainer, matchWrap(16, 8, 16, 4));
+
+        LinearLayout listHeader = horizontal();
+        listHeader.setPadding(dp(20), dp(6), dp(20), dp(6));
+        TextView indexLabel = text("PRIORITY INDEX", 11, 800, palette.sub);
+        indexLabel.setLetterSpacing(0.14f);
+        TextView autoSorted = text("auto-sorted", 11, 600, palette.sub);
+        autoSorted.setAlpha(0.8f);
+        listHeader.addView(indexLabel, weight(1, 0, 0, 0, 0));
+        listHeader.addView(autoSorted, wrap(0, 0, 0, 0));
+        column.addView(listHeader, matchWrap(0, 4, 0, 0));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        listContainer = vertical();
+        listContainer.setPadding(dp(20), dp(2), dp(20), dp(150));
+        scroll.addView(listContainer, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        column.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        addActZone();
+
+        confettiView = new ConfettiView(this);
+        FrameLayout.LayoutParams confettiParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        root.addView(confettiView, confettiParams);
+        confettiView.setClickable(false);
+        confettiView.setFocusable(false);
+
+        setContentView(root);
+    }
+
+    private LinearLayout buildHeader() {
+        LinearLayout header = horizontal();
+        header.setPadding(dp(24), dp(18), dp(20), dp(4));
+        header.setGravity(Gravity.TOP);
+
+        LinearLayout titleCol = vertical();
+        TextView today = text("Today", 23, 800, palette.ink);
+        today.setIncludeFontPadding(false);
+        headerSubView = text("", 13, 600, palette.sub);
+        titleCol.addView(today);
+        titleCol.addView(headerSubView, matchWrap(0, 5, 0, 0));
+        header.addView(titleCol, weight(1, 0, 0, 0, 0));
+
+        LinearLayout toggles = horizontal();
+        handPill = pill("Right");
+        handPill.setOnClickListener(v -> toggleHand());
+        themePill = pill("Day");
+        themePill.setOnClickListener(v -> cycleTheme());
+        toggles.addView(handPill, wrap(0, 0, 6, 0));
+        toggles.addView(themePill, wrap(0, 0, 0, 0));
+        header.addView(toggles, wrap(0, 0, 0, 0));
+        return header;
+    }
+
+    private void addActZone() {
+        reachArc = new View(this);
+        GradientDrawable arc = new GradientDrawable();
+        arc.setShape(GradientDrawable.OVAL);
+        arc.setColor(Color.TRANSPARENT);
+        arc.setStroke(dp(2), PriorityPalette.withAlpha(palette.accent, 0x52), dp(8), dp(8));
+        reachArc.setBackground(arc);
+        FrameLayout.LayoutParams arcParams = new FrameLayout.LayoutParams(dp(280), dp(280));
+        arcParams.gravity = Gravity.BOTTOM | (HAND_RIGHT.equals(hand) ? Gravity.END : Gravity.START);
+        arcParams.bottomMargin = dp(-118);
+        if (HAND_RIGHT.equals(hand)) {
+            arcParams.rightMargin = dp(-118);
+        } else {
+            arcParams.leftMargin = dp(-118);
+        }
+        root.addView(reachArc, arcParams);
+
+        fab = new TextView(this);
+        TextView fabText = (TextView) fab;
+        fabText.setText("+");
+        fabText.setTextSize(28);
+        fabText.setTypeface(Typeface.DEFAULT_BOLD);
+        fabText.setTextColor(palette.accentInk);
+        fabText.setGravity(Gravity.CENTER);
+        fabText.setIncludeFontPadding(false);
+        GradientDrawable fabBg = new GradientDrawable();
+        fabBg.setColor(palette.accent);
+        fabBg.setCornerRadius(dp(22));
+        fab.setBackground(fabBg);
+        fab.setElevation(dp(8));
+        fab.setOnClickListener(v -> openAddSheet());
+        FrameLayout.LayoutParams fabParams = new FrameLayout.LayoutParams(dp(60), dp(60));
+        fabParams.gravity = Gravity.BOTTOM | (HAND_RIGHT.equals(hand) ? Gravity.END : Gravity.START);
+        fabParams.bottomMargin = dp(24);
+        if (HAND_RIGHT.equals(hand)) {
+            fabParams.rightMargin = dp(20);
+        } else {
+            fabParams.leftMargin = dp(20);
+        }
+        root.addView(fab, fabParams);
+
+        View homeBar = new View(this);
+        GradientDrawable hb = new GradientDrawable();
+        hb.setColor(palette.ink);
+        hb.setCornerRadius(dp(2));
+        homeBar.setBackground(hb);
+        homeBar.setAlpha(0.16f);
+        FrameLayout.LayoutParams hbParams = new FrameLayout.LayoutParams(dp(120), dp(4));
+        hbParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        hbParams.bottomMargin = dp(8);
+        root.addView(homeBar, hbParams);
+    }
+
+    // ===================== rendering =====================
+
+    private void renderAll(boolean animateReorder) {
+        sortTasks();
+        List<TodoTask> active = activeTasks();
+        int total = tasks.size();
+        int remaining = active.size();
+        int done = total - remaining;
+        int pct = total == 0 ? 0 : Math.round((done / (float) total) * 100f);
+
+        TodoTask mit = active.isEmpty() ? null : active.get(0);
+        String mitCat = mit == null ? PriorityPalette.IMMEDIATE_LABEL : PriorityPalette.bucket(mit.score());
+
+        headerSubView.setText(remaining + " to go  ·  " + done + " done");
+        if (handPill != null) {
+            handPill.setText(HAND_RIGHT.equals(hand) ? "Right" : "Left");
+        }
+        if (themePill != null) {
+            themePill.setText(THEME_DAY.equals(theme) ? "Day" : THEME_NIGHT.equals(theme) ? "Night" : "Auto");
+        }
+
+        renderHero(mit, mitCat, pct, done, total);
+        renderList(active, animateReorder);
+    }
+
+    private void renderHero(TodoTask mit, String mitCat, int pct, int done, int total) {
+        heroContainer.removeAllViews();
         LinearLayout card = vertical();
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
-        card.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-        form.addView(card, matchWrapMargins(0, 0, 0, 0));
+        card.setPadding(dp(17), dp(16), dp(17), dp(16));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.surface);
+        bg.setCornerRadius(dp(24));
+        bg.setStroke(dp(2), PriorityPalette.catOutline(mitCat));
+        card.setBackground(bg);
 
-        formTitleView = text(editingId == null ? "Add a task" : "Edit task", 18, true);
-        formTitleView.setTextColor(palette.primaryText);
-        card.addView(formTitleView);
-
-        TextView quickHint = text("Title first. Details are optional.", 13, false);
-        quickHint.setSingleLine(false);
-        quickHint.setTextColor(palette.secondaryText);
-        card.addView(quickHint, matchWrapMargins(0, 5, 0, 10));
-
-        titleInput = input("Task name");
-        titleInput.setSingleLine(true);
-        card.addView(titleInput, matchWrapMargins(0, 0, 0, 10));
-
-        TextView defaults = text("High impact · Medium effort · Not urgent", 12, false);
-        defaults.setTextColor(palette.secondaryText);
-        card.addView(defaults, matchWrapMargins(0, 0, 0, 8));
-
-        detailsToggleButton = quietButton(detailsExpanded ? "Hide details" : "Details");
-        detailsToggleButton.setOnClickListener(view -> {
-            detailsExpanded = !detailsExpanded;
-            updateDetailsVisibility();
+        LinearLayout progressRow = horizontal();
+        FrameLayout track = new FrameLayout(this);
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setColor(PriorityPalette.withAlpha(palette.heroInk, 0x17));
+        trackBg.setCornerRadius(dp(3));
+        track.setBackground(trackBg);
+        progressFill = new View(this);
+        GradientDrawable fillBg = new GradientDrawable();
+        fillBg.setColor(PriorityPalette.catColor(mitCat));
+        fillBg.setCornerRadius(dp(3));
+        progressFill.setBackground(fillBg);
+        track.addView(progressFill, new FrameLayout.LayoutParams(0, dp(5)));
+        LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(0, dp(5), 1f);
+        trackParams.rightMargin = dp(10);
+        trackParams.gravity = Gravity.CENTER_VERTICAL;
+        progressRow.addView(track, trackParams);
+        progressText = text(done + " of " + total + " done", 11, 700, palette.heroSub);
+        progressRow.addView(progressText, wrap(0, 0, 0, 0));
+        card.addView(progressRow, matchWrap(0, 0, 0, 14));
+        final int pctFinal = pct;
+        final FrameLayout trackRef = track;
+        track.post(() -> {
+            int w = Math.round(trackRef.getWidth() * (pctFinal / 100f));
+            ViewGroup.LayoutParams lp = progressFill.getLayoutParams();
+            lp.width = w;
+            progressFill.setLayoutParams(lp);
         });
-        card.addView(detailsToggleButton, matchWrapMargins(0, 0, 0, 0));
 
-        detailsSection = vertical();
-        card.addView(detailsSection, matchWrapMargins(0, 14, 0, 0));
-
-        notesInput = input("Notes");
-        notesInput.setMinLines(3);
-        notesInput.setGravity(Gravity.TOP | Gravity.START);
-        notesInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        detailsSection.addView(notesInput, matchWrapMargins(0, 0, 0, 16));
-
-        detailsSection.addView(label("Impact"));
-        impactGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
-        detailsSection.addView(impactGroup, matchWrapMargins(0, 6, 0, 14));
-
-        detailsSection.addView(label("Effort"));
-        effortGroup = radioGroup("High", TodoTask.HIGH, "Medium", TodoTask.MEDIUM, "Low", TodoTask.LOW);
-        checkRadioByTag(effortGroup, TodoTask.MEDIUM);
-        detailsSection.addView(effortGroup, matchWrapMargins(0, 6, 0, 14));
-
-        detailsSection.addView(label("Dependency"));
-        dependencySpinner = spinner(DEPENDENCIES);
-        detailsSection.addView(dependencySpinner, matchWrapMargins(0, 6, 0, 14));
-
-        urgentInput = checkbox("Urgent (+1000)");
-        quickInput = checkbox("Quick task");
-        detailsSection.addView(urgentInput);
-        detailsSection.addView(quickInput, matchWrapMargins(0, 2, 0, 12));
-
-        detailsSection.addView(label("Reminder"));
-        reminderLabel = text("No reminder", 14, false);
-        reminderLabel.setSingleLine(false);
-        detailsSection.addView(reminderLabel, matchWrapMargins(0, 8, 0, 10));
-
-        LinearLayout reminderButtons = horizontal();
-        Button reminderButton = button("Pick time");
-        reminderButton.setOnClickListener(view -> pickReminder());
-        Button clearReminderButton = quietButton("Clear");
-        clearReminderButton.setOnClickListener(view -> {
-            selectedReminderAt = 0;
-            updateReminderLabel();
-        });
-        addWeightedButton(reminderButtons, reminderButton, 0);
-        addWeightedButton(reminderButtons, clearReminderButton, 10);
-        detailsSection.addView(reminderButtons, matchWrapMargins(0, 0, 0, 14));
-
-        detailsSection.addView(label("Repeat reminder"));
-        LinearLayout recurrenceRow = horizontal();
-        TextView everyLabel = text("Every", 14, false);
-        everyLabel.setTextColor(palette.secondaryText);
-        repeatEveryInput = input("1");
-        repeatEveryInput.setText("1");
-        repeatEveryInput.setSingleLine(true);
-        repeatEveryInput.setSelectAllOnFocus(true);
-        repeatEveryInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        repeatUnitSpinner = spinner(REPEAT_UNITS);
-        repeatUnitSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                updateReminderLabel();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                updateReminderLabel();
-            }
-        });
-        recurrenceRow.addView(everyLabel, wrapMargins(0, 0, 10, 0));
-        recurrenceRow.addView(repeatEveryInput, new LinearLayout.LayoutParams(dp(72),
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-        recurrenceRow.addView(repeatUnitSpinner, weightedMargins(1, 10, 0, 0, 0));
-        detailsSection.addView(recurrenceRow, matchWrapMargins(0, 6, 0, 7));
-
-        recurrenceHint = text("One-time reminder.", 12, false);
-        recurrenceHint.setSingleLine(false);
-        detailsSection.addView(recurrenceHint, matchWrapMargins(0, 0, 0, 0));
-
-        TodoTask editingTask = editingId == null ? null : findTask(editingId);
-        if (editingTask != null) {
-            populateForm(editingTask);
-        }
-        return form;
-    }
-
-    private void saveTaskFromForm() {
-        String title = titleInput.getText().toString().trim();
-        if (title.isEmpty()) {
-            titleInput.setError("Task name required");
-            return;
-        }
-
-        String repeatUnit = selectedRepeatUnit();
-        int repeatEvery = repeatEveryFromInput();
-        if (!TodoTask.REPEAT_NONE.equals(repeatUnit) && repeatEvery < 1) {
-            revealDetailsForError(repeatEveryInput);
-            repeatEveryInput.setError("Use 1 or more");
-            return;
-        }
-        if (!TodoTask.REPEAT_NONE.equals(repeatUnit) && selectedReminderAt == 0) {
-            revealDetailsForError(reminderLabel);
-            reminderLabel.setText("Pick a first reminder time before enabling repeat.");
-            reminderLabel.setTextColor(RED);
-            return;
-        }
-        if (selectedReminderAt > 0 && selectedReminderAt <= System.currentTimeMillis()) {
-            revealDetailsForError(reminderLabel);
-            reminderLabel.setText("Choose a future reminder time.");
-            reminderLabel.setTextColor(RED);
-            return;
-        }
-
-        TodoTask task = editingId == null ? new TodoTask() : findTask(editingId);
-        if (task == null) {
-            task = new TodoTask();
-            editingId = null;
-        }
-        task.title = title;
-        task.notes = notesInput.getText().toString().trim();
-        task.impact = selectedRadioTag(impactGroup, TodoTask.HIGH);
-        task.effort = selectedRadioTag(effortGroup, TodoTask.MEDIUM);
-        task.dependency = dependencySpinner.getSelectedItem().toString();
-        task.urgent = urgentInput.isChecked();
-        task.quickTask = quickInput.isChecked();
-        task.recurringMit = !TodoTask.REPEAT_NONE.equals(repeatUnit);
-        task.reminderAt = selectedReminderAt;
-        task.reminderRepeatUnit = selectedReminderAt > 0 ? repeatUnit : TodoTask.REPEAT_NONE;
-        task.reminderRepeatEvery = TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit) ? 1 : repeatEvery;
-
-        if (editingId == null) {
-            tasks.add(task);
-        }
-
-        ReminderScheduler.schedule(this, task);
-        sortTasks();
-        store.save(tasks);
-        resetForm();
-    }
-
-    private void renderTasks() {
-        sortTasks();
-        taskList.removeAllViews();
-
-        TodoTask mit = primaryMit();
         if (mit == null) {
-            mitCard.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-            mitKickerView.setTextColor(RED);
-            mitTitleView.setTextColor(palette.primaryText);
-            mitMetaView.setTextColor(palette.secondaryText);
-            mitTitleView.setText("No primary MIT");
-            mitMetaView.setText("Add a task to start today's index.");
-        } else {
-            mitCard.setBackground(roundedBackground(palette.surface, palette.divider, 8));
-            mitKickerView.setTextColor(RED);
-            mitTitleView.setTextColor(palette.primaryText);
-            mitMetaView.setTextColor(palette.secondaryText);
-            mitTitleView.setText(mit.title);
-            mitMetaView.setText("Score " + mit.scoreLabel() + " · " + mit.bucket());
-        }
-
-        if (tasks.isEmpty()) {
-            TextView empty = text("No tasks yet.", 15, false);
-            empty.setGravity(Gravity.CENTER_HORIZONTAL);
-            empty.setTextColor(palette.secondaryText);
-            taskList.addView(empty, matchWrapMargins(0, 18, 0, 0));
+            TextView clear = text("All clear for today", 21, 800, palette.heroInk);
+            TextView hint = text("Add a task and it sorts itself to the top.", 13, 600, palette.heroSub);
+            card.addView(clear);
+            card.addView(hint, matchWrap(0, 6, 0, 0));
+            heroContainer.addView(card, matchWrap(0, 0, 0, 0));
             return;
         }
 
-        for (TodoTask task : tasks) {
-            taskList.addView(taskRow(task), matchWrapMargins(0, 10, 0, 0));
+        FrameLayout heroWrap = new FrameLayout(this);
+        TextView heroReveal = text("", 12, 800, 0xFFFFFFFF);
+        heroReveal.setLetterSpacing(0.08f);
+        heroReveal.setGravity(Gravity.CENTER_VERTICAL);
+        heroReveal.setPadding(dp(22), 0, dp(22), 0);
+        heroReveal.setVisibility(View.INVISIBLE);
+        heroWrap.addView(heroReveal, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout heroFg = vertical();
+        LinearLayout pillRow = horizontal();
+        TextView catPill = categoryPill(mitCat);
+        TextView kicker = text("YOUR #1 RIGHT NOW", 11, 700, palette.heroSub);
+        kicker.setLetterSpacing(0.1f);
+        pillRow.addView(catPill, wrap(0, 0, 8, 0));
+        pillRow.addView(kicker, wrap(0, 0, 0, 0));
+        heroFg.addView(pillRow, matchWrap(0, 0, 0, 9));
+
+        TextView mitName = text(mit.title, 23, 800, palette.heroInk);
+        mitName.setSingleLine(false);
+        mitName.setMaxLines(3);
+        mitName.setEllipsize(TextUtils.TruncateAt.END);
+        heroFg.addView(mitName);
+
+        if (mit.reminderAt > 0) {
+            TextView remind = chipText(reminderShort(mit), PriorityPalette.catColor(mitCat),
+                    PriorityPalette.catSoft(mitCat));
+            heroFg.addView(remind, matchWrap(0, 11, 0, 0));
+        }
+        heroWrap.addView(heroFg, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+
+        attachHeroSwipe(heroFg, heroReveal, mit.id);
+        card.addView(heroWrap, matchWrap(0, 0, 0, 0));
+        heroContainer.addView(card, matchWrap(0, 0, 0, 0));
+    }
+
+    private void renderList(List<TodoTask> active, boolean animateReorder) {
+        rowTops.clear();
+        if (animateReorder) {
+            for (int i = 0; i < listContainer.getChildCount(); i++) {
+                View child = listContainer.getChildAt(i);
+                Object tag = child.getTag();
+                if (tag != null) {
+                    rowTops.put(tag.toString(), child.getTop());
+                }
+            }
+        }
+        listContainer.removeAllViews();
+
+        if (active.isEmpty()) {
+            TextView empty = text("Nothing in the index yet.", 14, 600, palette.sub);
+            empty.setGravity(Gravity.CENTER_HORIZONTAL);
+            listContainer.addView(empty, matchWrap(0, 24, 0, 0));
+            return;
+        }
+        for (TodoTask task : active) {
+            listContainer.addView(buildRow(task), matchWrap(0, 0, 0, 0));
+        }
+
+        if (animateReorder && !rowTops.isEmpty()) {
+            listContainer.post(() -> {
+                for (int i = 0; i < listContainer.getChildCount(); i++) {
+                    View child = listContainer.getChildAt(i);
+                    Object tag = child.getTag();
+                    if (tag == null) {
+                        continue;
+                    }
+                    Integer prev = rowTops.get(tag.toString());
+                    if (prev == null) {
+                        continue;
+                    }
+                    int dy = prev - child.getTop();
+                    if (Math.abs(dy) < 1) {
+                        continue;
+                    }
+                    child.setTranslationY(dy);
+                    child.animate().translationY(0f).setDuration(460).start();
+                }
+            });
         }
     }
 
-    private LinearLayout taskRow(TodoTask task) {
-        LinearLayout row = vertical();
-        row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackground(rowBackground(task.completed));
+    private FrameLayout buildRow(TodoTask task) {
+        String cat = PriorityPalette.bucket(task.score());
+        int tier = PriorityPalette.catColor(cat);
 
-        LinearLayout titleRow = horizontal();
-        CheckBox completeToggle = checkbox("");
-        completeToggle.setChecked(task.completed);
-        completeToggle.setContentDescription((task.completed ? "Restore " : "Complete ") + task.title);
-        completeToggle.setOnClickListener(view -> toggleTaskCompleted(task));
-        titleRow.addView(completeToggle, wrapMargins(0, 0, 10, 0));
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setTag(task.id);
+
+        TextView reveal = text("", 12, 800, 0xFFFFFFFF);
+        reveal.setLetterSpacing(0.08f);
+        reveal.setGravity(Gravity.CENTER_VERTICAL);
+        reveal.setPadding(dp(22), 0, dp(22), 0);
+        reveal.setVisibility(View.INVISIBLE);
+        wrap.addView(reveal, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout fg = horizontal();
+        fg.setPadding(dp(4), dp(13), dp(4), dp(13));
+        fg.setBackgroundColor(palette.surface);
+        GradientDrawable bottomLine = new GradientDrawable();
+        bottomLine.setColor(palette.surface);
+        // hairline divider drawn via a thin bottom view
+        View circle = new View(this);
+        GradientDrawable circleBg = new GradientDrawable();
+        circleBg.setShape(GradientDrawable.OVAL);
+        circleBg.setColor(PriorityPalette.catSoft(cat));
+        circleBg.setStroke(dp(2), tier);
+        circle.setBackground(circleBg);
+        circle.setClickable(true);
+        circle.setOnClickListener(v -> {
+            int[] loc = new int[2];
+            int[] rootLoc = new int[2];
+            v.getLocationOnScreen(loc);
+            root.getLocationOnScreen(rootLoc);
+            float cx = loc[0] - rootLoc[0] + v.getWidth() / 2f;
+            float cy = loc[1] - rootLoc[1] + v.getHeight() / 2f;
+            confettiView.burst(cx, cy, CONFETTI_COLORS);
+            completeTask(task.id);
+        });
+        LinearLayout.LayoutParams circleParams = new LinearLayout.LayoutParams(dp(18), dp(18));
+        circleParams.rightMargin = dp(14);
+        circleParams.gravity = Gravity.CENTER_VERTICAL;
+        fg.addView(circle, circleParams);
 
         LinearLayout copy = vertical();
-        TextView title = text(task.title, 17, true);
-        title.setTextColor(task.completed ? palette.secondaryText : palette.primaryText);
-        if (task.completed) {
-            title.setPaintFlags(title.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
-        }
-        title.setSingleLine(false);
-        title.setMaxLines(3);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        copy.addView(title);
+        TextView name = text(task.title, 16, 600, palette.ink);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(name);
 
-        TextView score = text("Score " + task.scoreLabel() + " · " + task.bucket(), 13, true);
-        score.setTextColor(task.urgent && !task.completed ? RED : palette.secondaryText);
-        copy.addView(score, matchWrapMargins(0, 5, 0, 0));
-        titleRow.addView(copy, weightedMargins(1, 0, 0, 0, 0));
-        row.addView(titleRow);
-
-        row.addView(text(taskDetails(task), 13, false), matchWrapMargins(0, 7, 0, 0));
-        if (!task.notes.isEmpty()) {
-            TextView notes = text(task.notes, 13, false);
-            notes.setSingleLine(false);
-            row.addView(notes, matchWrapMargins(0, 8, 0, 0));
-        }
+        LinearLayout metaRow = horizontal();
+        TextView catLabel = text(cat.toUpperCase(), 10, 800, tier);
+        catLabel.setLetterSpacing(0.07f);
+        metaRow.addView(catLabel, wrap(0, 0, 8, 0));
         if (task.reminderAt > 0) {
-            String reminderText = "Reminder " + formatDateTime(task.reminderAt);
-            if (task.repeatsReminder()) {
-                reminderText += " · " + task.recurrenceLabel();
+            TextView meta = text("⏰ " + reminderShort(task), 11, 600, palette.sub);
+            metaRow.addView(meta, wrap(0, 0, 0, 0));
+        }
+        copy.addView(metaRow, matchWrap(0, 4, 0, 0));
+        fg.addView(copy, weight(1, 0, 0, 0, 0));
+
+        wrap.addView(fg, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(palette.line);
+        FrameLayout.LayoutParams divParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1)));
+        divParams.gravity = Gravity.BOTTOM;
+        wrap.addView(divider, divParams);
+
+        attachRowSwipe(fg, reveal, task.id);
+        return wrap;
+    }
+
+    // ===================== gestures =====================
+
+    private int completeDir() {
+        return HAND_RIGHT.equals(hand) ? 1 : -1;
+    }
+
+    private void attachRowSwipe(View fg, TextView reveal, String id) {
+        final float[] startX = new float[1];
+        final boolean[] moved = new boolean[1];
+        final Runnable[] longPress = new Runnable[1];
+        fg.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startX[0] = event.getRawX();
+                    moved[0] = false;
+                    longPress[0] = () -> {
+                        if (!moved[0]) {
+                            openEditSheet(id);
+                        }
+                    };
+                    handler.postDelayed(longPress[0], 480);
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float dx = event.getRawX() - startX[0];
+                    if (!moved[0]) {
+                        if (Math.abs(dx) > dp(6)) {
+                            moved[0] = true;
+                            handler.removeCallbacks(longPress[0]);
+                        } else {
+                            return true;
+                        }
+                    }
+                    v.setTranslationX(dx);
+                    paintReveal(reveal, dx);
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    handler.removeCallbacks(longPress[0]);
+                    float dx = event.getRawX() - startX[0];
+                    if (moved[0] && Math.abs(dx) >= dp(72)) {
+                        int dir = dx > 0 ? 1 : -1;
+                        if (dir == completeDir()) {
+                            animateRowOut(v, dir, () -> completeTask(id));
+                        } else {
+                            animateRowOut(v, dir, () -> laterTask(id));
+                        }
+                    } else {
+                        v.animate().translationX(0f).setDuration(220).start();
+                        reveal.setVisibility(View.INVISIBLE);
+                    }
+                    return true;
+                }
+                default:
+                    return false;
             }
-            row.addView(text(reminderText, 13, false), matchWrapMargins(0, 8, 0, 0));
+        });
+    }
+
+    private void attachHeroSwipe(View fg, TextView reveal, String id) {
+        final float[] startX = new float[1];
+        final boolean[] moved = new boolean[1];
+        fg.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startX[0] = event.getRawX();
+                    moved[0] = false;
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float dx = event.getRawX() - startX[0];
+                    if (!moved[0]) {
+                        if (Math.abs(dx) > dp(6)) {
+                            moved[0] = true;
+                        } else {
+                            return true;
+                        }
+                    }
+                    v.setTranslationX(dx);
+                    paintReveal(reveal, dx);
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    float dx = event.getRawX() - startX[0];
+                    if (moved[0] && Math.abs(dx) >= dp(72)) {
+                        int dir = dx > 0 ? 1 : -1;
+                        if (dir == completeDir()) {
+                            completeTask(id);
+                        } else {
+                            laterTask(id);
+                        }
+                    } else {
+                        v.animate().translationX(0f).setDuration(220).start();
+                        reveal.setVisibility(View.INVISIBLE);
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        });
+    }
+
+    private void paintReveal(TextView reveal, float dx) {
+        if (Math.abs(dx) < dp(12)) {
+            reveal.setVisibility(View.INVISIBLE);
+            return;
+        }
+        int dir = dx > 0 ? 1 : -1;
+        boolean isComplete = dir == completeDir();
+        reveal.setVisibility(View.VISIBLE);
+        reveal.setBackgroundColor(isComplete ? PriorityPalette.GREEN_REVEAL : palette.accent);
+        reveal.setGravity((dx > 0 ? Gravity.START : Gravity.END) | Gravity.CENTER_VERTICAL);
+        reveal.setText(isComplete ? "DONE" : "LATER");
+    }
+
+    private void animateRowOut(View fg, int dir, Runnable after) {
+        fg.animate().translationX(dir * fg.getWidth()).setDuration(200)
+                .withEndAction(after).start();
+    }
+
+    // ===================== task actions =====================
+
+    private void completeTask(String id) {
+        TodoTask task = findTask(id);
+        if (task == null || task.completed) {
+            return;
+        }
+        task.completed = true;
+        task.snoozed = false;
+        ReminderScheduler.cancel(this, task);
+        store.save(tasks);
+        renderAll(true);
+        showToast("Completed", "complete", id);
+    }
+
+    private void laterTask(String id) {
+        TodoTask task = findTask(id);
+        if (task == null || task.snoozed) {
+            return;
+        }
+        task.snoozed = true;
+        store.save(tasks);
+        renderAll(true);
+        showToast("Moved to Later", "later", id);
+    }
+
+    private void undoLast() {
+        if (toastTaskId == null) {
+            return;
+        }
+        TodoTask task = findTask(toastTaskId);
+        if (task != null) {
+            if ("complete".equals(toastActionType)) {
+                task.completed = false;
+                ReminderScheduler.schedule(this, task);
+            } else {
+                task.snoozed = false;
+            }
+            store.save(tasks);
+            renderAll(true);
+        }
+        dismissToast();
+    }
+
+    // ===================== toast / cheer =====================
+
+    private void showToast(String msg, String type, String id) {
+        dismissToast();
+        toastTaskId = id;
+        toastActionType = type;
+
+        LinearLayout bar = horizontal();
+        bar.setPadding(dp(16), dp(11), dp(12), dp(11));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFF1D2030);
+        bg.setCornerRadius(dp(14));
+        bar.setBackground(bg);
+        bar.setElevation(dp(8));
+        TextView label = text(msg, 13, 600, 0xFFFFFFFF);
+        bar.addView(label, wrap(0, 0, 16, 0));
+        TextView undo = text("Undo", 13, 800, 0xFFA3A9FF);
+        undo.setPadding(dp(4), dp(2), dp(4), dp(2));
+        undo.setOnClickListener(v -> undoLast());
+        bar.addView(undo, wrap(0, 0, 0, 0));
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = dp(96);
+        toastView = bar;
+        root.addView(toastView, lp);
+
+        toastDismiss = this::dismissToast;
+        handler.postDelayed(toastDismiss, 2800);
+    }
+
+    private void dismissToast() {
+        if (toastDismiss != null) {
+            handler.removeCallbacks(toastDismiss);
+            toastDismiss = null;
+        }
+        if (toastView != null) {
+            root.removeView(toastView);
+            toastView = null;
+        }
+        toastTaskId = null;
+        toastActionType = null;
+    }
+
+    private void showCheer(String msg) {
+        dismissCheer();
+        TextView chip = text(msg, 13, 700, palette.surface);
+        chip.setPadding(dp(15), dp(8), dp(15), dp(8));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.ink);
+        bg.setCornerRadius(dp(999));
+        chip.setBackground(bg);
+        chip.setElevation(dp(8));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        lp.bottomMargin = dp(108);
+        cheerView = chip;
+        root.addView(cheerView, lp);
+        cheerDismiss = this::dismissCheer;
+        handler.postDelayed(cheerDismiss, 1050);
+    }
+
+    private void dismissCheer() {
+        if (cheerDismiss != null) {
+            handler.removeCallbacks(cheerDismiss);
+            cheerDismiss = null;
+        }
+        if (cheerView != null) {
+            root.removeView(cheerView);
+            cheerView = null;
+        }
+    }
+
+    // ===================== sheet =====================
+
+    private void openAddSheet() {
+        sheetMode = "add";
+        sheetEditId = null;
+        draftName = "";
+        draftImpact = TodoTask.LOW;
+        draftEffort = TodoTask.LOW;
+        draftDep = "None";
+        draftUrgent = false;
+        draftQuick = true;
+        draftReminderAt = 0;
+        draftRepeatUnit = TodoTask.REPEAT_NONE;
+        draftRepeatEvery = 1;
+        detailsExpanded = false;
+        presentSheet();
+    }
+
+    private void openEditSheet(String id) {
+        TodoTask task = findTask(id);
+        if (task == null) {
+            return;
+        }
+        sheetMode = "edit";
+        sheetEditId = id;
+        draftName = task.title;
+        draftImpact = task.impact;
+        draftEffort = task.effort;
+        draftDep = task.dependency;
+        draftUrgent = task.urgent;
+        draftQuick = task.quickTask;
+        draftReminderAt = task.reminderAt;
+        draftRepeatUnit = task.reminderRepeatUnit;
+        draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
+        detailsExpanded = true;
+        presentSheet();
+    }
+
+    private void presentSheet() {
+        if (sheetOverlay != null) {
+            removeSheetImmediate();
+        }
+        sheetOpen = true;
+
+        sheetOverlay = new FrameLayout(this);
+        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+
+        sheetScrim = new View(this);
+        sheetScrim.setBackgroundColor(0x66080A18);
+        sheetScrim.setOnClickListener(v -> closeSheet());
+        sheetOverlay.addView(sheetScrim, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        sheetPanel = vertical();
+        sheetPanel.setPadding(dp(18), dp(8), dp(18), dp(18));
+        GradientDrawable panelBg = new GradientDrawable();
+        panelBg.setColor(palette.surface);
+        panelBg.setCornerRadii(new float[]{dp(26), dp(26), dp(26), dp(26), 0, 0, 0, 0});
+        sheetPanel.setBackground(panelBg);
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        panelParams.gravity = Gravity.BOTTOM;
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout content = vertical();
+        buildSheetContent(content);
+        scroll.addView(content, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        sheetPanel.addView(scroll, matchWrap(0, 0, 0, 0));
+
+        sheetOverlay.addView(sheetPanel, panelParams);
+        root.addView(sheetOverlay, overlayParams);
+
+        sheetScrim.setAlpha(0f);
+        sheetScrim.animate().alpha(1f).setDuration(180).start();
+        sheetPanel.post(() -> {
+            int h = sheetPanel.getHeight();
+            sheetPanel.setTranslationY(h);
+            sheetPanel.animate().translationY(0f).setDuration(280).start();
+        });
+
+        sheetInput.requestFocus();
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.showSoftInput(sheetInput, InputMethodManager.SHOW_IMPLICIT);
+        }
+    }
+
+    private void buildSheetContent(LinearLayout content) {
+        View grip = new View(this);
+        GradientDrawable gripBg = new GradientDrawable();
+        gripBg.setColor(palette.line);
+        gripBg.setCornerRadius(dp(2));
+        grip.setBackground(gripBg);
+        LinearLayout.LayoutParams gripParams = new LinearLayout.LayoutParams(dp(40), dp(4));
+        gripParams.gravity = Gravity.CENTER_HORIZONTAL;
+        gripParams.topMargin = dp(2);
+        gripParams.bottomMargin = dp(14);
+        content.addView(grip, gripParams);
+
+        LinearLayout titleRow = horizontal();
+        TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 17, 800, palette.ink);
+        titleRow.addView(title, weight(1, 0, 0, 0, 0));
+        TextView landsLabel = text("Lands in", 11, 700, palette.sub);
+        titleRow.addView(landsLabel, wrap(0, 0, 7, 0));
+        landsPill = categoryPill(predictBucket());
+        titleRow.addView(landsPill, wrap(0, 0, 0, 0));
+        content.addView(titleRow, matchWrap(0, 0, 0, 13));
+
+        sheetInput = new EditText(this);
+        sheetInput.setHint("What needs doing?");
+        sheetInput.setText(draftName);
+        sheetInput.setSingleLine(true);
+        sheetInput.setTextSize(16);
+        sheetInput.setTextColor(palette.ink);
+        sheetInput.setHintTextColor(palette.sub);
+        sheetInput.setPadding(dp(15), dp(14), dp(15), dp(14));
+        GradientDrawable inputBg = new GradientDrawable();
+        inputBg.setColor(palette.bg);
+        inputBg.setCornerRadius(dp(14));
+        inputBg.setStroke(dp(2), palette.line);
+        sheetInput.setBackground(inputBg);
+        sheetInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                draftName = s.toString();
+                updateSheetDynamic();
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        content.addView(sheetInput, matchWrap(0, 0, 0, 0));
+
+        remindChip = text("", 13, 700, palette.sub);
+        remindChip.setPadding(dp(4), dp(8), dp(4), dp(8));
+        remindChip.setOnClickListener(v -> openReminderPicker());
+        content.addView(remindChip, wrap(0, 12, 0, 0));
+
+        reminderRepeatRow = horizontal();
+        content.addView(reminderRepeatRow, matchWrap(0, 6, 0, 0));
+
+        detailsToggle = text("", 12, 800, palette.accent);
+        LinearLayout toggleRow = horizontal();
+        GradientDrawable toggleBg = new GradientDrawable();
+        toggleBg.setColor(palette.bg);
+        toggleBg.setCornerRadius(dp(12));
+        toggleRow.setBackground(toggleBg);
+        toggleRow.setPadding(dp(14), dp(11), dp(14), dp(11));
+        toggleRow.setOnClickListener(v -> {
+            detailsExpanded = !detailsExpanded;
+            updateSheetDynamic();
+        });
+        detailsSummary = text("", 12, 600, palette.sub);
+        toggleRow.addView(detailsSummary, weight(1, 0, 0, 12, 0));
+        toggleRow.addView(detailsToggle, wrap(0, 0, 0, 0));
+        content.addView(toggleRow, matchWrap(0, 12, 0, 0));
+
+        chipsContainer = vertical();
+        content.addView(chipsContainer, matchWrap(0, 12, 0, 0));
+
+        LinearLayout actions = horizontal();
+        commitButton = text("", 15, 800, palette.accentInk);
+        commitButton.setGravity(Gravity.CENTER);
+        commitButton.setPadding(dp(15), dp(15), dp(15), dp(15));
+        GradientDrawable commitBg = new GradientDrawable();
+        commitBg.setColor(palette.accent);
+        commitBg.setCornerRadius(dp(16));
+        commitButton.setBackground(commitBg);
+        commitButton.setOnClickListener(v -> commitSheet());
+        actions.addView(commitButton, weight(1, 0, 0, 10, 0));
+
+        TextView cancel = text("Cancel", 15, 700, palette.sub);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setPadding(dp(18), dp(15), dp(18), dp(15));
+        GradientDrawable cancelBg = new GradientDrawable();
+        cancelBg.setColor(Color.TRANSPARENT);
+        cancelBg.setCornerRadius(dp(16));
+        cancelBg.setStroke(dp(2), palette.line);
+        cancel.setBackground(cancelBg);
+        cancel.setOnClickListener(v -> closeSheet());
+        actions.addView(cancel, wrap(0, 0, 0, 0));
+        content.addView(actions, matchWrap(0, 18, 0, 0));
+
+        if ("edit".equals(sheetMode)) {
+            TextView del = text("Delete task", 13, 700, PriorityPalette.IMMEDIATE);
+            del.setGravity(Gravity.CENTER);
+            del.setPadding(dp(10), dp(12), dp(10), dp(4));
+            del.setOnClickListener(v -> confirmDelete(sheetEditId));
+            content.addView(del, matchWrap(0, 6, 0, 0));
         }
 
-        LinearLayout secondaryActions = horizontal();
-        Button edit = quietButton("Edit");
-        edit.setOnClickListener(view -> editTask(task));
+        updateSheetDynamic();
+    }
 
-        Button delete = quietButton("Delete");
-        delete.setOnClickListener(view -> confirmDelete(task));
+    private void updateSheetDynamic() {
+        String bucket = predictBucket();
+        styleCategoryPill(landsPill, bucket);
 
-        addWeightedButton(secondaryActions, edit, 0);
-        addWeightedButton(secondaryActions, delete, 12);
-        row.addView(secondaryActions, matchWrapMargins(0, 8, 0, 0));
+        List<String> parts = new ArrayList<>();
+        parts.add(impactLabel(draftImpact) + " impact");
+        parts.add(impactLabel(draftEffort) + " effort");
+        if (!"None".equals(draftDep)) {
+            parts.add(draftDep);
+        }
+        if (draftQuick) {
+            parts.add("Quick win");
+        }
+        if (draftUrgent) {
+            parts.add("Urgent");
+        }
+        detailsSummary.setText("Assumed: " + TextUtils.join("  ·  ", parts));
+        detailsToggle.setText(detailsExpanded ? "Done" : "Adjust");
+
+        remindChip.setText(draftReminderAt > 0 ? "⏰ " + reminderShortFromMillis(draftReminderAt) : "⏰ Add reminder");
+        remindChip.setTextColor(draftReminderAt > 0 ? palette.accent : palette.sub);
+
+        reminderRepeatRow.removeAllViews();
+        if (draftReminderAt > 0) {
+            buildRepeatControls(reminderRepeatRow);
+        }
+
+        chipsContainer.removeAllViews();
+        chipsContainer.setVisibility(detailsExpanded ? View.VISIBLE : View.GONE);
+        if (detailsExpanded) {
+            buildChips(chipsContainer);
+        }
+
+        boolean ready = draftName.trim().length() > 0;
+        commitButton.setText("edit".equals(sheetMode) ? "Save" : "Add task");
+        commitButton.setAlpha(ready ? 1f : 0.4f);
+        commitButton.setEnabled(ready);
+    }
+
+    private void buildChips(LinearLayout container) {
+        container.addView(chipGroupLabel("IMPACT"));
+        container.addView(impactEffortRow("impact"), matchWrap(0, 8, 0, 15));
+        container.addView(chipGroupLabel("EFFORT"));
+        container.addView(impactEffortRow("effort"), matchWrap(0, 8, 0, 15));
+        container.addView(chipGroupLabel("DEPENDENCY"));
+        container.addView(depRow(), matchWrap(0, 8, 0, 15));
+
+        LinearLayout flags = horizontal();
+        TextView urgent = chipButton("Urgent", draftUrgent, PriorityPalette.SOMEDAY, 0xFFFFFFFF);
+        urgent.setOnClickListener(v -> {
+            draftUrgent = !draftUrgent;
+            updateSheetDynamic();
+        });
+        TextView quick = chipButton("Quick win", draftQuick, palette.accent, palette.accentInk);
+        quick.setOnClickListener(v -> {
+            draftQuick = !draftQuick;
+            updateSheetDynamic();
+        });
+        flags.addView(urgent, wrap(0, 0, 8, 0));
+        flags.addView(quick, wrap(0, 0, 0, 0));
+        container.addView(flags, matchWrap(0, 0, 0, 0));
+    }
+
+    private LinearLayout impactEffortRow(String field) {
+        LinearLayout row = horizontal();
+        String[][] opts = {{"High", TodoTask.HIGH}, {"Medium", TodoTask.MEDIUM}, {"Low", TodoTask.LOW}};
+        for (int i = 0; i < opts.length; i++) {
+            String label = opts[i][0];
+            String val = opts[i][1];
+            boolean active = "impact".equals(field) ? draftImpact.equals(val) : draftEffort.equals(val);
+            int color = valueColor(val);
+            int ink = valueInk(val);
+            TextView chip = chipButton(label, active, color, ink);
+            chip.setOnClickListener(v -> {
+                if ("impact".equals(field)) {
+                    draftImpact = val;
+                } else {
+                    draftEffort = val;
+                }
+                updateSheetDynamic();
+            });
+            row.addView(chip, wrap(0, 0, i < opts.length - 1 ? 8 : 0, 0));
+        }
         return row;
     }
 
-    private String taskDetails(TodoTask task) {
-        List<String> details = new ArrayList<>();
-        details.add("Impact " + task.impact);
-        details.add("Effort " + task.effort);
-        details.add(task.urgent ? "Urgent" : "Not urgent");
-        details.add("Dependency " + task.dependency);
-        if (task.quickTask) {
-            details.add("Quick");
+    private LinearLayout depRow() {
+        LinearLayout row = horizontal();
+        for (int i = 0; i < DEPENDENCIES.length; i++) {
+            String val = DEPENDENCIES[i];
+            boolean active = draftDep.equals(val);
+            TextView chip = chipButton(val, active, PriorityPalette.DEP_PURPLE, 0xFFFFFFFF);
+            chip.setOnClickListener(v -> {
+                draftDep = val;
+                updateSheetDynamic();
+            });
+            row.addView(chip, wrap(0, 0, i < DEPENDENCIES.length - 1 ? 8 : 0, 0));
         }
-        return join(details, " / ");
+        return row;
     }
 
-    private void toggleTaskCompleted(TodoTask task) {
-        task.completed = !task.completed;
-        if (task.completed) {
-            ReminderScheduler.cancel(this, task);
+    private void buildRepeatControls(LinearLayout row) {
+        Spinner unit = new Spinner(this);
+        unit.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, REPEAT_UNITS));
+        unit.setSelection(repeatUnitIndex(draftRepeatUnit));
+        unit.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                draftRepeatUnit = repeatUnitFromIndex(position);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
+        row.addView(unit, weight(1, 0, 0, 8, 0));
+
+        EditText every = new EditText(this);
+        every.setText(String.valueOf(Math.max(1, draftRepeatEvery)));
+        every.setInputType(InputType.TYPE_CLASS_NUMBER);
+        every.setTextColor(palette.ink);
+        every.setSingleLine(true);
+        every.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                try {
+                    draftRepeatEvery = Math.max(1, Integer.parseInt(s.toString().trim()));
+                } catch (NumberFormatException ignored) {
+                    draftRepeatEvery = 1;
+                }
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        row.addView(every, new LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void openReminderPicker() {
+        Calendar calendar = Calendar.getInstance();
+        if (draftReminderAt > 0) {
+            calendar.setTimeInMillis(draftReminderAt);
         } else {
-            ReminderScheduler.schedule(this, task);
+            calendar.add(Calendar.HOUR_OF_DAY, 1);
         }
-        saveAndRender();
+        DatePickerDialog datePicker = new DatePickerDialog(this, (view, year, month, day) -> {
+            calendar.set(Calendar.YEAR, year);
+            calendar.set(Calendar.MONTH, month);
+            calendar.set(Calendar.DAY_OF_MONTH, day);
+            TimePickerDialog timePicker = new TimePickerDialog(this, (tv, hour, minute) -> {
+                calendar.set(Calendar.HOUR_OF_DAY, hour);
+                calendar.set(Calendar.MINUTE, minute);
+                calendar.set(Calendar.SECOND, 0);
+                calendar.set(Calendar.MILLISECOND, 0);
+                draftReminderAt = calendar.getTimeInMillis();
+                updateSheetDynamic();
+            }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), false);
+            timePicker.show();
+        }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH));
+        datePicker.show();
     }
 
-    private void openAddPanel() {
-        editingId = null;
-        selectedReminderAt = 0;
-        detailsExpanded = false;
-        formOpen = true;
-        buildUi();
-        renderTasks();
-    }
-
-    private void editTask(TodoTask task) {
-        editingId = task.id;
-        selectedReminderAt = task.reminderAt;
-        detailsExpanded = true;
-        formOpen = true;
-        buildUi();
-        renderTasks();
-    }
-
-    private void populateForm(TodoTask task) {
-        titleInput.setText(task.title);
-        notesInput.setText(task.notes);
-        checkRadioByTag(impactGroup, task.impact);
-        checkRadioByTag(effortGroup, task.effort);
-        dependencySpinner.setSelection(indexOfDependency(task.dependency));
-        urgentInput.setChecked(task.urgent);
-        quickInput.setChecked(task.quickTask);
-        selectedReminderAt = task.reminderAt;
-        repeatEveryInput.setText(String.valueOf(Math.max(1, task.reminderRepeatEvery)));
-        repeatUnitSpinner.setSelection(indexOfRepeatUnit(task.reminderRepeatUnit));
-    }
-
-    private void resetForm() {
-        editingId = null;
-        selectedReminderAt = 0;
-        detailsExpanded = false;
-        formOpen = false;
-        buildUi();
-        renderTasks();
-    }
-
-    private void updateDetailsVisibility() {
-        if (detailsSection == null || detailsToggleButton == null) {
+    private void commitSheet() {
+        String name = draftName.trim();
+        if (name.isEmpty()) {
             return;
         }
-        detailsSection.setVisibility(detailsExpanded ? View.VISIBLE : View.GONE);
-        detailsToggleButton.setText(detailsExpanded ? "Hide details" : "Details");
-    }
+        boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
+        if (repeats && draftReminderAt == 0) {
+            draftRepeatUnit = TodoTask.REPEAT_NONE;
+        }
+        if (draftReminderAt > 0 && draftReminderAt <= System.currentTimeMillis()) {
+            draftReminderAt = 0;
+            draftRepeatUnit = TodoTask.REPEAT_NONE;
+        }
 
-    private void revealDetailsForError(View target) {
-        detailsExpanded = true;
-        updateDetailsVisibility();
-        if (target != null) {
-            target.requestFocus();
+        TodoTask task;
+        boolean isNew = "add".equals(sheetMode);
+        if (isNew) {
+            task = new TodoTask();
+        } else {
+            task = findTask(sheetEditId);
+            if (task == null) {
+                task = new TodoTask();
+                isNew = true;
+            }
+        }
+        task.title = name;
+        task.impact = draftImpact;
+        task.effort = draftEffort;
+        task.dependency = draftDep;
+        task.urgent = draftUrgent;
+        task.quickTask = draftQuick;
+        task.reminderAt = draftReminderAt;
+        task.reminderRepeatUnit = draftReminderAt > 0 ? draftRepeatUnit : TodoTask.REPEAT_NONE;
+        task.reminderRepeatEvery = TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)
+                ? 1 : Math.max(1, draftRepeatEvery);
+        if (isNew) {
+            tasks.add(task);
+        }
+        ReminderScheduler.schedule(this, task);
+        store.save(tasks);
+        closeSheet();
+        renderAll(true);
+        if (isNew) {
+            showCheer("Let's go!");
         }
     }
 
-    private void confirmDelete(TodoTask task) {
+    private void confirmDelete(String id) {
+        TodoTask task = findTask(id);
+        if (task == null) {
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Delete task?")
                 .setMessage("This removes \"" + task.title + "\" from your priority index.")
@@ -539,106 +1210,200 @@ public final class MainActivity extends Activity {
                 .setPositiveButton("Delete", (dialog, which) -> {
                     ReminderScheduler.cancel(this, task);
                     tasks.remove(task);
-                    saveAndRender();
+                    store.save(tasks);
+                    closeSheet();
+                    renderAll(true);
                 })
                 .show();
     }
 
-    private void pickReminder() {
-        Calendar calendar = Calendar.getInstance();
-        if (selectedReminderAt > 0) {
-            calendar.setTimeInMillis(selectedReminderAt);
-        } else {
-            calendar.add(Calendar.HOUR_OF_DAY, 1);
-        }
-
-        DatePickerDialog datePicker = new DatePickerDialog(
-                this,
-                (view, year, month, dayOfMonth) -> {
-                    calendar.set(Calendar.YEAR, year);
-                    calendar.set(Calendar.MONTH, month);
-                    calendar.set(Calendar.DAY_OF_MONTH, dayOfMonth);
-                    TimePickerDialog timePicker = new TimePickerDialog(
-                            this,
-                            (timeView, hourOfDay, minute) -> {
-                                calendar.set(Calendar.HOUR_OF_DAY, hourOfDay);
-                                calendar.set(Calendar.MINUTE, minute);
-                                calendar.set(Calendar.SECOND, 0);
-                                calendar.set(Calendar.MILLISECOND, 0);
-                                selectedReminderAt = calendar.getTimeInMillis();
-                                updateReminderLabel();
-                            },
-                            calendar.get(Calendar.HOUR_OF_DAY),
-                            calendar.get(Calendar.MINUTE),
-                            false
-                    );
-                    timePicker.show();
-                },
-                calendar.get(Calendar.YEAR),
-                calendar.get(Calendar.MONTH),
-                calendar.get(Calendar.DAY_OF_MONTH)
-        );
-        datePicker.show();
-    }
-
-    private void updateReminderLabel() {
-        if (reminderLabel == null) {
+    private void closeSheet() {
+        if (sheetOverlay == null) {
+            sheetOpen = false;
             return;
         }
-
-        if (selectedReminderAt > 0) {
-            reminderLabel.setText("First reminder: " + formatDateTime(selectedReminderAt));
-            reminderLabel.setTextColor(palette.primaryText);
-        } else {
-            reminderLabel.setText("No reminder");
-            reminderLabel.setTextColor(palette.secondaryText);
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null && sheetInput != null) {
+            imm.hideSoftInputFromWindow(sheetInput.getWindowToken(), 0);
         }
-
-        if (recurrenceHint == null || repeatEveryInput == null) {
-            return;
-        }
-        String repeatUnit = selectedRepeatUnit();
-        boolean repeats = !TodoTask.REPEAT_NONE.equals(repeatUnit);
-        repeatEveryInput.setEnabled(repeats);
-        repeatEveryInput.setAlpha(repeats ? 1.0f : 0.48f);
-        if (!repeats) {
-            recurrenceHint.setText("One-time reminder.");
-        } else if (selectedReminderAt == 0) {
-            recurrenceHint.setText("Pick a first reminder time, then repeat "
-                    + recurrencePreview(repeatUnit) + ".");
-        } else {
-            recurrenceHint.setText("Repeats " + recurrencePreview(repeatUnit)
-                    + " after the first reminder.");
-        }
-        recurrenceHint.setTextColor(palette.secondaryText);
+        final FrameLayout overlay = sheetOverlay;
+        sheetScrim.animate().alpha(0f).setDuration(160).start();
+        sheetPanel.animate().translationY(sheetPanel.getHeight()).setDuration(220)
+                .withEndAction(() -> root.removeView(overlay)).start();
+        sheetOverlay = null;
+        sheetOpen = false;
     }
 
-    private void saveAndRender() {
-        sortTasks();
-        store.save(tasks);
-        renderTasks();
+    private void removeSheetImmediate() {
+        if (sheetOverlay != null) {
+            root.removeView(sheetOverlay);
+            sheetOverlay = null;
+        }
+        sheetOpen = false;
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (sheetOpen) {
+            closeSheet();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    // ===================== sheet helpers =====================
+
+    private String predictBucket() {
+        TodoTask probe = new TodoTask();
+        probe.impact = draftImpact;
+        probe.effort = draftEffort;
+        probe.urgent = draftUrgent;
+        return PriorityPalette.bucket(probe.score());
+    }
+
+    private int valueColor(String value) {
+        if (TodoTask.HIGH.equals(value)) {
+            return PriorityPalette.IMMEDIATE;
+        }
+        if (TodoTask.MEDIUM.equals(value)) {
+            return PriorityPalette.NEXT_WEEK;
+        }
+        return PriorityPalette.SOMEDAY;
+    }
+
+    private int valueInk(String value) {
+        return TodoTask.MEDIUM.equals(value) ? 0xFF1B1F2E : 0xFFFFFFFF;
+    }
+
+    private String impactLabel(String value) {
+        if (TodoTask.HIGH.equals(value)) {
+            return "High";
+        }
+        if (TodoTask.MEDIUM.equals(value)) {
+            return "Medium";
+        }
+        return "Low";
+    }
+
+    private int repeatUnitIndex(String unit) {
+        if (TodoTask.REPEAT_DAY.equals(unit)) {
+            return 1;
+        }
+        if (TodoTask.REPEAT_WEEK.equals(unit)) {
+            return 2;
+        }
+        if (TodoTask.REPEAT_MONTH.equals(unit)) {
+            return 3;
+        }
+        return 0;
+    }
+
+    private String repeatUnitFromIndex(int index) {
+        if (index == 1) {
+            return TodoTask.REPEAT_DAY;
+        }
+        if (index == 2) {
+            return TodoTask.REPEAT_WEEK;
+        }
+        if (index == 3) {
+            return TodoTask.REPEAT_MONTH;
+        }
+        return TodoTask.REPEAT_NONE;
+    }
+
+    private TextView chipGroupLabel(String value) {
+        TextView label = text(value, 11, 800, palette.sub);
+        label.setLetterSpacing(0.1f);
+        return label;
+    }
+
+    private TextView chipButton(String label, boolean active, int activeColor, int activeInk) {
+        TextView chip = new TextView(this);
+        chip.setText(label);
+        chip.setTextSize(13);
+        applyFont(chip, active ? 700 : 600);
+        chip.setPadding(dp(14), dp(9), dp(14), dp(9));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(999));
+        if (active) {
+            bg.setColor(activeColor);
+            bg.setStroke(dp(2), activeColor);
+            chip.setTextColor(activeInk);
+        } else {
+            bg.setColor(Color.TRANSPARENT);
+            bg.setStroke(dp(2), palette.line);
+            chip.setTextColor(palette.sub);
+        }
+        chip.setBackground(bg);
+        return chip;
+    }
+
+    private TextView categoryPill(String bucket) {
+        TextView pill = new TextView(this);
+        styleCategoryPill(pill, bucket);
+        return pill;
+    }
+
+    private void styleCategoryPill(TextView pill, String bucket) {
+        pill.setText(bucket.toUpperCase());
+        pill.setTextSize(10);
+        applyFont(pill, 800);
+        pill.setLetterSpacing(0.06f);
+        pill.setTextColor(0xFFFFFFFF);
+        pill.setPadding(dp(9), dp(3), dp(9), dp(3));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(PriorityPalette.catColor(bucket));
+        bg.setCornerRadius(dp(999));
+        pill.setBackground(bg);
+    }
+
+    private TextView chipText(String value, int fg, int bgColor) {
+        TextView chip = new TextView(this);
+        chip.setText(value);
+        chip.setTextSize(11);
+        applyFont(chip, 700);
+        chip.setTextColor(fg);
+        chip.setPadding(dp(9), dp(4), dp(9), dp(4));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(bgColor);
+        bg.setCornerRadius(dp(999));
+        chip.setBackground(bg);
+        return chip;
+    }
+
+    // ===================== model helpers =====================
+
+    private List<TodoTask> activeTasks() {
+        List<TodoTask> out = new ArrayList<>();
+        for (TodoTask task : tasks) {
+            if (!task.completed) {
+                out.add(task);
+            }
+        }
+        Collections.sort(out, new Comparator<TodoTask>() {
+            @Override
+            public int compare(TodoTask first, TodoTask second) {
+                int byScore = Double.compare(second.score(), first.score());
+                if (byScore != 0) {
+                    return byScore;
+                }
+                return Long.compare(first.createdAt, second.createdAt);
+            }
+        });
+        return out;
     }
 
     private void sortTasks() {
         Collections.sort(tasks, new Comparator<TodoTask>() {
             @Override
             public int compare(TodoTask first, TodoTask second) {
-                int score = Double.compare(second.score(), first.score());
-                if (score != 0) {
-                    return score;
+                int byScore = Double.compare(second.score(), first.score());
+                if (byScore != 0) {
+                    return byScore;
                 }
                 return Long.compare(first.createdAt, second.createdAt);
             }
         });
-    }
-
-    private TodoTask primaryMit() {
-        for (TodoTask task : tasks) {
-            if (!task.completed) {
-                return task;
-            }
-        }
-        return null;
     }
 
     private TodoTask findTask(String id) {
@@ -649,6 +1414,16 @@ public final class MainActivity extends Activity {
         }
         return null;
     }
+
+    private String reminderShort(TodoTask task) {
+        return reminderShortFromMillis(task.reminderAt);
+    }
+
+    private String reminderShortFromMillis(long millis) {
+        return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(new Date(millis));
+    }
+
+    // ===================== reminders bootstrap (unchanged behavior) =====================
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -670,9 +1445,9 @@ public final class MainActivity extends Activity {
         long now = System.currentTimeMillis();
         for (TodoTask task : tasks) {
             if (!task.completed && task.repeatsReminder() && task.reminderAt <= now) {
-                long nextReminder = task.nextReminderAfter(now);
-                if (nextReminder > 0) {
-                    task.reminderAt = nextReminder;
+                long next = task.nextReminderAfter(now);
+                if (next > 0) {
+                    task.reminderAt = next;
                     changed = true;
                 }
             }
@@ -683,208 +1458,39 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private RadioGroup radioGroup(String firstLabel, String firstValue,
-                                  String secondLabel, String secondValue,
-                                  String thirdLabel, String thirdValue) {
-        RadioGroup group = new RadioGroup(this);
-        group.setOrientation(RadioGroup.HORIZONTAL);
-        group.addView(radio(firstLabel, firstValue), new RadioGroup.LayoutParams(
-                0, RadioGroup.LayoutParams.WRAP_CONTENT, 1));
-        group.addView(radio(secondLabel, secondValue), new RadioGroup.LayoutParams(
-                0, RadioGroup.LayoutParams.WRAP_CONTENT, 1));
-        group.addView(radio(thirdLabel, thirdValue), new RadioGroup.LayoutParams(
-                0, RadioGroup.LayoutParams.WRAP_CONTENT, 1));
-        checkRadioByTag(group, firstValue);
-        return group;
+    // ===================== view factory helpers =====================
+
+    private TextView pill(String label) {
+        TextView pill = new TextView(this);
+        pill.setText(label);
+        pill.setTextSize(11);
+        applyFont(pill, 700);
+        pill.setTextColor(palette.sub);
+        pill.setPadding(dp(11), dp(7), dp(11), dp(7));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.surface);
+        bg.setCornerRadius(dp(999));
+        bg.setStroke(dp(1), palette.line);
+        pill.setBackground(bg);
+        return pill;
     }
 
-    private RadioButton radio(String label, String value) {
-        RadioButton button = new RadioButton(this);
-        button.setText(label);
-        button.setTextSize(14);
-        button.setTextColor(palette.primaryText);
-        button.setTag(value);
-        button.setId(View.generateViewId());
-        button.setMinHeight(dp(48));
-        button.setMinWidth(0);
-        button.setPadding(0, 0, 0, 0);
-        return button;
-    }
-
-    private void checkRadioByTag(RadioGroup group, String value) {
-        for (int index = 0; index < group.getChildCount(); index++) {
-            View child = group.getChildAt(index);
-            if (value.equals(child.getTag())) {
-                group.check(child.getId());
-                return;
-            }
-        }
-    }
-
-    private String selectedRadioTag(RadioGroup group, String fallback) {
-        int selectedId = group.getCheckedRadioButtonId();
-        View selected = group.findViewById(selectedId);
-        return selected == null ? fallback : String.valueOf(selected.getTag());
-    }
-
-    private int indexOfDependency(String value) {
-        for (int index = 0; index < DEPENDENCIES.length; index++) {
-            if (DEPENDENCIES[index].equals(value)) {
-                return index;
-            }
-        }
-        return 0;
-    }
-
-    private int indexOfRepeatUnit(String value) {
-        String normalized = TodoTask.normalizeRepeatUnit(value);
-        if (TodoTask.REPEAT_DAY.equals(normalized)) {
-            return 1;
-        }
-        if (TodoTask.REPEAT_WEEK.equals(normalized)) {
-            return 2;
-        }
-        if (TodoTask.REPEAT_MONTH.equals(normalized)) {
-            return 3;
-        }
-        return 0;
-    }
-
-    private String selectedRepeatUnit() {
-        if (repeatUnitSpinner == null) {
-            return TodoTask.REPEAT_NONE;
-        }
-        int position = repeatUnitSpinner.getSelectedItemPosition();
-        if (position == 1) {
-            return TodoTask.REPEAT_DAY;
-        }
-        if (position == 2) {
-            return TodoTask.REPEAT_WEEK;
-        }
-        if (position == 3) {
-            return TodoTask.REPEAT_MONTH;
-        }
-        return TodoTask.REPEAT_NONE;
-    }
-
-    private int repeatEveryFromInput() {
-        String raw = repeatEveryInput.getText().toString().trim();
-        if (raw.isEmpty()) {
-            return 1;
-        }
-        try {
-            return Integer.parseInt(raw);
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
-    }
-
-    private String recurrencePreview(String repeatUnit) {
-        int every = Math.max(1, repeatEveryFromInput());
-        return "every " + every + " " + repeatUnitLabel(repeatUnit, every);
-    }
-
-    private EditText input(String hint) {
-        EditText input = new EditText(this);
-        input.setHint(hint);
-        input.setTextSize(16);
-        input.setTextColor(palette.primaryText);
-        input.setHintTextColor(palette.secondaryText);
-        input.setMinHeight(dp(48));
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setSingleLine(false);
-        input.setBackground(roundedBackground(palette.field, palette.divider, 8));
-        return input;
-    }
-
-    private CheckBox checkbox(String text) {
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(text);
-        checkBox.setTextSize(14);
-        checkBox.setTextColor(palette.primaryText);
-        checkBox.setMinHeight(dp(48));
-        return checkBox;
-    }
-
-    private Spinner spinner(String[] values) {
-        Spinner spinner = new Spinner(this);
-        spinner.setAdapter(spinnerAdapter(values));
-        spinner.setBackground(roundedBackground(palette.field, palette.divider, 8));
-        spinner.setPadding(dp(8), 0, dp(8), 0);
-        spinner.setMinimumHeight(dp(48));
-        return spinner;
-    }
-
-    private ArrayAdapter<String> spinnerAdapter(String[] values) {
-        return new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, values) {
-            @Override
-            public View getView(int position, View convertView, ViewGroup parent) {
-                return spinnerText(getItem(position), false);
-            }
-
-            @Override
-            public View getDropDownView(int position, View convertView, ViewGroup parent) {
-                return spinnerText(getItem(position), true);
-            }
-        };
-    }
-
-    private TextView spinnerText(String value, boolean dropDown) {
-        TextView view = text(value == null ? "" : value, 15, false);
-        view.setTextColor(dropDown ? 0xFF000000 : palette.primaryText);
-        view.setGravity(Gravity.CENTER_VERTICAL);
-        view.setMinHeight(dp(48));
-        view.setPadding(dp(10), 0, dp(10), 0);
-        return view;
-    }
-
-    private TextView text(String value, int sizeSp, boolean bold) {
+    private TextView text(String value, int sizeSp, int weight, int color) {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(sizeSp);
-        view.setTextColor(palette.secondaryText);
+        view.setTextColor(color);
+        applyFont(view, weight);
         view.setIncludeFontPadding(true);
-        view.setLineSpacing(0, 1.05f);
-        if (bold) {
-            view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return view;
+    }
+
+    private void applyFont(TextView view, int weight) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            view.setTypeface(Typeface.create(Typeface.SANS_SERIF, weight, false));
+        } else {
+            view.setTypeface(Typeface.SANS_SERIF, weight >= 600 ? Typeface.BOLD : Typeface.NORMAL);
         }
-        return view;
-    }
-
-    private TextView label(String value) {
-        TextView view = text(value, 13, true);
-        view.setTextColor(palette.primaryText);
-        return view;
-    }
-
-    private Button button(String text) {
-        Button button = baseButton(text);
-        button.setTextColor(0xFFFFFFFF);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setBackground(buttonBackground(RED, RED));
-        return button;
-    }
-
-    private Button quietButton(String text) {
-        Button button = baseButton(text);
-        button.setTextColor(palette.secondaryText);
-        button.setBackground(buttonBackground(palette.surface, palette.divider));
-        return button;
-    }
-
-    private Button baseButton(String text) {
-        Button button = new Button(this);
-        button.setText(text);
-        button.setAllCaps(false);
-        button.setTextSize(14);
-        button.setMinHeight(dp(48));
-        button.setMinimumHeight(dp(48));
-        button.setMinWidth(dp(48));
-        button.setMinimumWidth(dp(48));
-        button.setPadding(dp(14), 0, dp(14), 0);
-        button.setSingleLine(true);
-        button.setEllipsize(TextUtils.TruncateAt.END);
-        return button;
     }
 
     private LinearLayout vertical() {
@@ -900,140 +1506,28 @@ public final class MainActivity extends Activity {
         return layout;
     }
 
-    private Drawable rowBackground(boolean completed) {
-        return roundedBackground(completed ? palette.completedSurface : palette.surface, palette.divider, 8);
-    }
-
-    private Drawable buttonBackground(int fill, int stroke) {
-        GradientDrawable content = rounded(fill, stroke, 8);
-        GradientDrawable mask = rounded(0xFFFFFFFF, 0xFFFFFFFF, 8);
-        int rippleColor = fill == RED ? 0x33FFFFFF : 0x22000000;
-        return new RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask);
-    }
-
-    private Drawable roundedBackground(int fill, int stroke, int radiusDp) {
-        return rounded(fill, stroke, radiusDp);
-    }
-
-    private GradientDrawable rounded(int fill, int stroke, int radiusDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(fill);
-        drawable.setCornerRadius(dp(radiusDp));
-        drawable.setStroke(dp(1), stroke);
-        return drawable;
-    }
-
-    private void addWeightedButton(LinearLayout row, Button button, int leftMargin) {
-        row.addView(button, weightedMargins(1, leftMargin, 0, 0, 0));
-    }
-
-    private void toggleMode() {
-        nightMode = !nightMode;
-        SharedPreferences preferences = getSharedPreferences(UI_PREFS, MODE_PRIVATE);
-        preferences.edit().putBoolean(NIGHT_MODE, nightMode).apply();
-        buildUi();
-        renderTasks();
-    }
-
-    private LinearLayout.LayoutParams matchWrapMargins(int left, int top, int right, int bottom) {
+    private LinearLayout.LayoutParams matchWrap(int left, int top, int right, int bottom) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.setMargins(dp(left), dp(top), dp(right), dp(bottom));
         return params;
     }
 
-    private LinearLayout.LayoutParams wrapMargins(int left, int top, int right, int bottom) {
+    private LinearLayout.LayoutParams wrap(int left, int top, int right, int bottom) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.setMargins(dp(left), dp(top), dp(right), dp(bottom));
         return params;
     }
 
-    private LinearLayout.LayoutParams weightedMargins(float weight, int left, int top, int right, int bottom) {
+    private LinearLayout.LayoutParams weight(float weight, int left, int top, int right, int bottom) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                weight
-        );
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
         params.setMargins(dp(left), dp(top), dp(right), dp(bottom));
         return params;
     }
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private String formatDateTime(long millis) {
-        return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-                .format(new Date(millis));
-    }
-
-    private String join(List<String> values, String separator) {
-        StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < values.size(); index++) {
-            if (index > 0) {
-                builder.append(separator);
-            }
-            builder.append(values.get(index));
-        }
-        return builder.toString();
-    }
-
-    private String repeatUnitLabel(String unit, int every) {
-        if (TodoTask.REPEAT_MONTH.equals(unit)) {
-            return every == 1 ? "month" : "months";
-        }
-        if (TodoTask.REPEAT_WEEK.equals(unit)) {
-            return every == 1 ? "week" : "weeks";
-        }
-        return every == 1 ? "day" : "days";
-    }
-
-    private static final class Palette {
-        final int background;
-        final int surface;
-        final int field;
-        final int completedSurface;
-        final int primaryText;
-        final int secondaryText;
-        final int divider;
-
-        private Palette(int background, int surface, int field, int completedSurface,
-                        int primaryText, int secondaryText, int divider) {
-            this.background = background;
-            this.surface = surface;
-            this.field = field;
-            this.completedSurface = completedSurface;
-            this.primaryText = primaryText;
-            this.secondaryText = secondaryText;
-            this.divider = divider;
-        }
-
-        static Palette from(boolean nightMode) {
-            if (nightMode) {
-                return new Palette(
-                        0xFF000000,
-                        0xFF1B1B1D,
-                        0xFF101011,
-                        0xFF111111,
-                        0xFFFFFFFF,
-                        0xFFB8B8B8,
-                        0xFF2A2A2A
-                );
-            }
-            return new Palette(
-                    0xFFFFFFFF,
-                    0xFFFFFFFF,
-                    0xFFF5F5F6,
-                    0xFFF6F6F6,
-                    0xFF000000,
-                    0xFF8D8D8D,
-                    0xFFE3E3E3
-            );
-        }
     }
 }

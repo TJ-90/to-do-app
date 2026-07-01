@@ -24,6 +24,7 @@ final class TodoTask {
     String dependency = "None";
     boolean urgent;
     boolean quickTask;
+    boolean snoozed;
     boolean recurringMit;
     boolean completed;
     long createdAt = System.currentTimeMillis();
@@ -32,7 +33,11 @@ final class TodoTask {
     int reminderRepeatEvery = 1;
 
     double score() {
-        return ((double) impactValue(impact) / effortValue(effort)) + (urgent ? 1000 : 0);
+        double s = ((double) impactValue(impact) / effortValue(effort)) + (urgent ? 1000 : 0);
+        if (snoozed) {
+            s -= 5000;
+        }
+        return s;
     }
 
     String scoreLabel() {
@@ -60,6 +65,7 @@ final class TodoTask {
         json.put("dependency", dependency);
         json.put("urgent", urgent);
         json.put("quickTask", quickTask);
+        json.put("snoozed", snoozed);
         json.put("recurringMit", recurringMit);
         json.put("completed", completed);
         json.put("createdAt", createdAt);
@@ -79,6 +85,7 @@ final class TodoTask {
         task.dependency = json.optString("dependency", "None");
         task.urgent = json.optBoolean("urgent", false);
         task.quickTask = json.optBoolean("quickTask", false);
+        task.snoozed = json.optBoolean("snoozed", false);
         task.recurringMit = json.optBoolean("recurringMit", false);
         task.completed = json.optBoolean("completed", false);
         task.createdAt = json.optLong("createdAt", System.currentTimeMillis());
