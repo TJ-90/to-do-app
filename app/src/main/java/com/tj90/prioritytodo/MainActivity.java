@@ -1,6 +1,7 @@
 package com.tj90.prioritytodo;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
@@ -10,7 +11,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -27,6 +32,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
@@ -76,8 +83,8 @@ public final class MainActivity extends Activity {
 
     private FrameLayout root;
     private TextView headerSubView;
-    private TextView handPill;
-    private TextView themePill;
+    private HeaderIconButton handPill;
+    private HeaderIconButton themePill;
     private View progressFill;
     private TextView progressText;
     private LinearLayout heroContainer;
@@ -123,6 +130,7 @@ public final class MainActivity extends Activity {
     private LinearLayout reminderRepeatRow;
     private LinearLayout chipsContainer;
     private TextView commitButton;
+    private boolean detailsAnimating;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -269,9 +277,9 @@ public final class MainActivity extends Activity {
         header.addView(titleCol, weight(1, 0, 0, 0, 0));
 
         LinearLayout toggles = horizontal();
-        handPill = pill("Right");
+        handPill = new HeaderIconButton(this, "hand");
         handPill.setOnClickListener(v -> toggleHand());
-        themePill = pill("Day");
+        themePill = new HeaderIconButton(this, "theme");
         themePill.setOnClickListener(v -> cycleTheme());
         toggles.addView(handPill, wrap(0, 0, 6, 0));
         toggles.addView(themePill, wrap(0, 0, 0, 0));
@@ -357,10 +365,10 @@ public final class MainActivity extends Activity {
 
         headerSubView.setText(remaining + " to go  ·  " + done + " done");
         if (handPill != null) {
-            handPill.setText(HAND_RIGHT.equals(hand) ? "Right" : "Left");
+            handPill.setState(hand, theme);
         }
         if (themePill != null) {
-            themePill.setText(THEME_DAY.equals(theme) ? "Day" : THEME_NIGHT.equals(theme) ? "Night" : "Auto");
+            themePill.setState(hand, theme);
         }
 
         renderHero(mit, mitCat, pct, done, total);
@@ -832,7 +840,7 @@ public final class MainActivity extends Activity {
         draftRepeatUnit = TodoTask.REPEAT_NONE;
         draftRepeatEvery = 1;
         detailsExpanded = false;
-        presentSheet();
+        openSheetWithFabTransition();
     }
 
     private void openEditSheet(String id) {
@@ -853,6 +861,31 @@ public final class MainActivity extends Activity {
         draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
         detailsExpanded = true;
         presentSheet();
+    }
+
+    private void openSheetWithFabTransition() {
+        if (fab == null) {
+            presentSheet();
+            return;
+        }
+        fab.animate().cancel();
+        fab.animate()
+                .scaleX(0.84f)
+                .scaleY(0.84f)
+                .alpha(0.58f)
+                .setDuration(100)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    presentSheet();
+                    fab.animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .alpha(1f)
+                            .setDuration(180)
+                            .setInterpolator(new OvershootInterpolator(1.8f))
+                            .start();
+                })
+                .start();
     }
 
     private void presentSheet() {
@@ -894,10 +927,22 @@ public final class MainActivity extends Activity {
 
         sheetScrim.setAlpha(0f);
         sheetScrim.animate().alpha(1f).setDuration(180).start();
+        sheetPanel.setAlpha(0f);
+        sheetPanel.setScaleX(0.96f);
+        sheetPanel.setScaleY(0.96f);
         sheetPanel.post(() -> {
             int h = sheetPanel.getHeight();
-            sheetPanel.setTranslationY(h);
-            sheetPanel.animate().translationY(0f).setDuration(280).start();
+            sheetPanel.setPivotX(HAND_RIGHT.equals(hand) ? sheetPanel.getWidth() - dp(48) : dp(48));
+            sheetPanel.setPivotY(sheetPanel.getHeight());
+            sheetPanel.setTranslationY(h + dp(24));
+            sheetPanel.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(320)
+                    .setInterpolator(new OvershootInterpolator(0.9f))
+                    .start();
         });
 
         sheetInput.requestFocus();
@@ -966,10 +1011,7 @@ public final class MainActivity extends Activity {
         toggleBg.setCornerRadius(dp(12));
         toggleRow.setBackground(toggleBg);
         toggleRow.setPadding(dp(14), dp(11), dp(14), dp(11));
-        toggleRow.setOnClickListener(v -> {
-            detailsExpanded = !detailsExpanded;
-            updateSheetDynamic();
-        });
+        toggleRow.setOnClickListener(v -> toggleDetailsAnimated());
         detailsSummary = text("", 12, 600, palette.sub);
         toggleRow.addView(detailsSummary, weight(1, 0, 0, 12, 0));
         toggleRow.addView(detailsToggle, wrap(0, 0, 0, 0));
@@ -1039,16 +1081,96 @@ public final class MainActivity extends Activity {
             buildRepeatControls(reminderRepeatRow);
         }
 
-        chipsContainer.removeAllViews();
-        chipsContainer.setVisibility(detailsExpanded ? View.VISIBLE : View.GONE);
-        if (detailsExpanded) {
-            buildChips(chipsContainer);
+        if (!detailsAnimating) {
+            chipsContainer.removeAllViews();
+            chipsContainer.setVisibility(detailsExpanded ? View.VISIBLE : View.GONE);
+            chipsContainer.setAlpha(1f);
+            chipsContainer.setScaleY(1f);
+            ViewGroup.LayoutParams params = chipsContainer.getLayoutParams();
+            if (params != null) {
+                params.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                chipsContainer.setLayoutParams(params);
+            }
+            if (detailsExpanded) {
+                buildChips(chipsContainer);
+            }
         }
 
         boolean ready = draftName.trim().length() > 0;
         commitButton.setText("edit".equals(sheetMode) ? "Save" : "Add task");
         commitButton.setAlpha(ready ? 1f : 0.4f);
         commitButton.setEnabled(ready);
+    }
+
+    private void toggleDetailsAnimated() {
+        if (chipsContainer == null || detailsAnimating) {
+            return;
+        }
+        boolean expand = !detailsExpanded;
+        detailsExpanded = expand;
+        detailsAnimating = true;
+        updateSheetDynamic();
+
+        if (expand) {
+            chipsContainer.removeAllViews();
+            buildChips(chipsContainer);
+            chipsContainer.setVisibility(View.VISIBLE);
+            chipsContainer.setAlpha(0f);
+            chipsContainer.setScaleY(0.96f);
+            chipsContainer.setPivotY(0f);
+            int width = chipsContainer.getWidth();
+            if (width <= 0 && sheetPanel != null) {
+                width = sheetPanel.getWidth() - dp(36);
+            }
+            int widthSpec = View.MeasureSpec.makeMeasureSpec(Math.max(1, width), View.MeasureSpec.EXACTLY);
+            int heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+            chipsContainer.measure(widthSpec, heightSpec);
+            animateDetailsHeight(0, chipsContainer.getMeasuredHeight(), true);
+        } else {
+            animateDetailsHeight(Math.max(1, chipsContainer.getHeight()), 0, false);
+        }
+    }
+
+    private void animateDetailsHeight(int from, int to, boolean expanding) {
+        ViewGroup.LayoutParams params = chipsContainer.getLayoutParams();
+        if (params == null) {
+            detailsAnimating = false;
+            updateSheetDynamic();
+            return;
+        }
+        params.height = from;
+        chipsContainer.setLayoutParams(params);
+        ValueAnimator animator = ValueAnimator.ofInt(from, to);
+        animator.setDuration(260);
+        animator.setInterpolator(new DecelerateInterpolator());
+        animator.addUpdateListener(animation -> {
+            ViewGroup.LayoutParams lp = chipsContainer.getLayoutParams();
+            lp.height = (int) animation.getAnimatedValue();
+            chipsContainer.setLayoutParams(lp);
+        });
+        chipsContainer.animate()
+                .alpha(expanding ? 1f : 0f)
+                .scaleY(expanding ? 1f : 0.96f)
+                .setDuration(220)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+        animator.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                ViewGroup.LayoutParams lp = chipsContainer.getLayoutParams();
+                lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                chipsContainer.setLayoutParams(lp);
+                if (!expanding) {
+                    chipsContainer.removeAllViews();
+                    chipsContainer.setVisibility(View.GONE);
+                }
+                chipsContainer.setAlpha(1f);
+                chipsContainer.setScaleY(1f);
+                detailsAnimating = false;
+                updateSheetDynamic();
+            }
+        });
+        animator.start();
     }
 
     private void buildChips(LinearLayout container) {
@@ -1472,6 +1594,145 @@ public final class MainActivity extends Activity {
         }
         if (changed) {
             store.save(tasks);
+        }
+    }
+
+    private final class HeaderIconButton extends View {
+        private final String kind;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF oval = new RectF();
+        private final Path path = new Path();
+        private String handState = HAND_RIGHT;
+        private String themeState = THEME_DAY;
+
+        HeaderIconButton(Context context, String kind) {
+            super(context);
+            this.kind = kind;
+            setClickable(true);
+            setFocusable(true);
+            setState(hand, theme);
+        }
+
+        void setState(String handState, String themeState) {
+            this.handState = handState;
+            this.themeState = themeState;
+            if ("hand".equals(kind)) {
+                setContentDescription(HAND_RIGHT.equals(handState) ? "Right hand" : "Left hand");
+            } else if (THEME_DAY.equals(themeState)) {
+                setContentDescription("Day theme");
+            } else if (THEME_NIGHT.equals(themeState)) {
+                setContentDescription("Night theme");
+            } else {
+                setContentDescription("Auto theme");
+            }
+            invalidate();
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int size = dp(44);
+            setMeasuredDimension(size, size);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float stroke = dp(1);
+            oval.set(stroke, stroke, getWidth() - stroke, getHeight() - stroke);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(palette.surface);
+            canvas.drawOval(oval, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(stroke);
+            paint.setColor(palette.line);
+            canvas.drawOval(oval, paint);
+            if ("hand".equals(kind)) {
+                drawHand(canvas);
+            } else {
+                drawTheme(canvas);
+            }
+        }
+
+        private void drawHand(Canvas canvas) {
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            canvas.save();
+            if (HAND_LEFT.equals(handState)) {
+                canvas.scale(-1f, 1f, cx, cy);
+            }
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(palette.sub);
+            canvas.drawLine(cx - dp(7), cy + dp(2), cx - dp(7), cy - dp(6), paint);
+            canvas.drawLine(cx - dp(2), cy + dp(1), cx - dp(2), cy - dp(10), paint);
+            canvas.drawLine(cx + dp(3), cy + dp(1), cx + dp(3), cy - dp(8), paint);
+            canvas.drawLine(cx + dp(8), cy + dp(4), cx + dp(8), cy - dp(3), paint);
+            path.reset();
+            path.moveTo(cx - dp(12), cy + dp(2));
+            path.quadTo(cx - dp(17), cy - dp(3), cx - dp(12), cy - dp(7));
+            path.quadTo(cx - dp(9), cy - dp(2), cx - dp(8), cy + dp(7));
+            path.quadTo(cx - dp(6), cy + dp(15), cx + dp(2), cy + dp(16));
+            path.quadTo(cx + dp(11), cy + dp(15), cx + dp(12), cy + dp(5));
+            canvas.drawPath(path, paint);
+            canvas.restore();
+        }
+
+        private void drawTheme(Canvas canvas) {
+            if (THEME_NIGHT.equals(themeState)) {
+                drawMoon(canvas);
+            } else if (THEME_SYSTEM.equals(themeState)) {
+                drawAuto(canvas);
+            } else {
+                drawSun(canvas, getWidth() / 2f, getHeight() / 2f, 1f);
+            }
+        }
+
+        private void drawSun(Canvas canvas, float cx, float cy, float scale) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(palette.sub);
+            float radius = dp(5) * scale;
+            canvas.drawCircle(cx, cy, radius, paint);
+            float inner = dp(11) * scale;
+            float outer = dp(15) * scale;
+            for (int i = 0; i < 8; i++) {
+                double angle = i * Math.PI / 4d;
+                float x1 = cx + (float) Math.cos(angle) * inner;
+                float y1 = cy + (float) Math.sin(angle) * inner;
+                float x2 = cx + (float) Math.cos(angle) * outer;
+                float y2 = cy + (float) Math.sin(angle) * outer;
+                canvas.drawLine(x1, y1, x2, y2, paint);
+            }
+        }
+
+        private void drawMoon(Canvas canvas) {
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(palette.sub);
+            canvas.drawCircle(cx - dp(2), cy, dp(10), paint);
+            paint.setColor(palette.surface);
+            canvas.drawCircle(cx + dp(3), cy - dp(3), dp(10), paint);
+        }
+
+        private void drawAuto(Canvas canvas) {
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            drawSun(canvas, cx, cy, 0.72f);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(palette.sub);
+            oval.set(cx - dp(15), cy - dp(15), cx + dp(15), cy + dp(15));
+            canvas.drawArc(oval, 205, 250, false, paint);
+            path.reset();
+            path.moveTo(cx - dp(13), cy + dp(11));
+            path.lineTo(cx - dp(17), cy + dp(12));
+            path.lineTo(cx - dp(15), cy + dp(8));
+            canvas.drawPath(path, paint);
         }
     }
 
