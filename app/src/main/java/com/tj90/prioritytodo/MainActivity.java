@@ -29,6 +29,7 @@ import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -319,6 +320,16 @@ public final class MainActivity extends Activity {
         }
         root.addView(fab, fabParams);
 
+        View fabTarget = new View(this);
+        fabTarget.setContentDescription("Add task");
+        fabTarget.setOnClickListener(v -> openAddSheet());
+        FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(dp(60), dp(60));
+        targetParams.gravity = fabParams.gravity;
+        targetParams.bottomMargin = fabParams.bottomMargin;
+        targetParams.leftMargin = fabParams.leftMargin;
+        targetParams.rightMargin = fabParams.rightMargin;
+        root.addView(fabTarget, targetParams);
+
         View homeBar = new View(this);
         GradientDrawable hb = new GradientDrawable();
         hb.setColor(palette.ink);
@@ -507,7 +518,13 @@ public final class MainActivity extends Activity {
         GradientDrawable bottomLine = new GradientDrawable();
         bottomLine.setColor(palette.surface);
         // hairline divider drawn via a thin bottom view
-        View circle = new View(this);
+        CheckBox circle = new CheckBox(this);
+        circle.setButtonDrawable(null);
+        circle.setText("");
+        circle.setMinWidth(0);
+        circle.setMinHeight(0);
+        circle.setPadding(0, 0, 0, 0);
+        circle.setContentDescription("Complete task");
         GradientDrawable circleBg = new GradientDrawable();
         circleBg.setShape(GradientDrawable.OVAL);
         circleBg.setColor(PriorityPalette.catSoft(cat));
