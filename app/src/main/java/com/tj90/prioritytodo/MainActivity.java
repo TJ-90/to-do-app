@@ -90,6 +90,7 @@ public final class MainActivity extends Activity {
     private LinearLayout heroContainer;
     private LinearLayout listContainer;
     private View fab;
+    private View fabTarget;
     private View reachArc;
 
     private final Map<String, Integer> rowTops = new HashMap<>();
@@ -328,7 +329,7 @@ public final class MainActivity extends Activity {
         }
         root.addView(fab, fabParams);
 
-        View fabTarget = new View(this);
+        fabTarget = new View(this);
         fabTarget.setContentDescription("Add task");
         fabTarget.setOnClickListener(v -> openAddSheet());
         FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(dp(60), dp(60));
@@ -869,21 +870,21 @@ public final class MainActivity extends Activity {
             return;
         }
         fab.animate().cancel();
+        if (fabTarget != null) {
+            fabTarget.setVisibility(View.INVISIBLE);
+        }
+        if (reachArc != null) {
+            reachArc.animate().alpha(0f).setDuration(140).start();
+        }
         fab.animate()
-                .scaleX(0.84f)
-                .scaleY(0.84f)
-                .alpha(0.58f)
-                .setDuration(100)
+                .scaleX(0.72f)
+                .scaleY(0.72f)
+                .alpha(0f)
+                .setDuration(130)
                 .setInterpolator(new DecelerateInterpolator())
                 .withEndAction(() -> {
+                    fab.setVisibility(View.INVISIBLE);
                     presentSheet();
-                    fab.animate()
-                            .scaleX(1f)
-                            .scaleY(1f)
-                            .alpha(1f)
-                            .setDuration(180)
-                            .setInterpolator(new OvershootInterpolator(1.8f))
-                            .start();
                 })
                 .start();
     }
@@ -893,8 +894,10 @@ public final class MainActivity extends Activity {
             removeSheetImmediate();
         }
         sheetOpen = true;
+        hideActZoneInstant();
 
         sheetOverlay = new FrameLayout(this);
+        sheetOverlay.setElevation(dp(24));
         FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
 
@@ -910,6 +913,7 @@ public final class MainActivity extends Activity {
         panelBg.setColor(palette.surface);
         panelBg.setCornerRadii(new float[]{dp(26), dp(26), dp(26), dp(26), 0, 0, 0, 0});
         sheetPanel.setBackground(panelBg);
+        sheetPanel.setElevation(dp(26));
         FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         panelParams.gravity = Gravity.BOTTOM;
@@ -1368,7 +1372,10 @@ public final class MainActivity extends Activity {
         final FrameLayout overlay = sheetOverlay;
         sheetScrim.animate().alpha(0f).setDuration(160).start();
         sheetPanel.animate().translationY(sheetPanel.getHeight()).setDuration(220)
-                .withEndAction(() -> root.removeView(overlay)).start();
+                .withEndAction(() -> {
+                    root.removeView(overlay);
+                    restoreActZone();
+                }).start();
         sheetOverlay = null;
         sheetOpen = false;
     }
@@ -1379,6 +1386,46 @@ public final class MainActivity extends Activity {
             sheetOverlay = null;
         }
         sheetOpen = false;
+        restoreActZone();
+    }
+
+    private void hideActZoneInstant() {
+        if (fab != null) {
+            fab.animate().cancel();
+            fab.setVisibility(View.INVISIBLE);
+        }
+        if (fabTarget != null) {
+            fabTarget.setVisibility(View.INVISIBLE);
+        }
+        if (reachArc != null) {
+            reachArc.animate().cancel();
+            reachArc.setAlpha(0f);
+        }
+    }
+
+    private void restoreActZone() {
+        if (fab != null) {
+            fab.animate().cancel();
+            fab.setVisibility(View.VISIBLE);
+            fab.setAlpha(0f);
+            fab.setScaleX(0.9f);
+            fab.setScaleY(0.9f);
+            fab.animate()
+                    .alpha(1f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(180)
+                    .setInterpolator(new OvershootInterpolator(1.6f))
+                    .start();
+        }
+        if (fabTarget != null) {
+            fabTarget.setVisibility(View.VISIBLE);
+        }
+        if (reachArc != null) {
+            reachArc.animate().cancel();
+            reachArc.setAlpha(0f);
+            reachArc.animate().alpha(1f).setDuration(180).start();
+        }
     }
 
     @Override
