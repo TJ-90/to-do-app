@@ -1677,7 +1677,7 @@ public final class MainActivity extends Activity {
 
         @Override
         protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int size = dp(44);
+            int size = dp(36);
             setMeasuredDimension(size, size);
         }
 
@@ -1701,27 +1701,33 @@ public final class MainActivity extends Activity {
         }
 
         private void drawHand(Canvas canvas) {
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
+            float center = getWidth() / 2f;
+            float scale = getWidth() / 36f;
             canvas.save();
             if (HAND_LEFT.equals(handState)) {
-                canvas.scale(-1f, 1f, cx, cy);
+                canvas.scale(-1f, 1f, center, center);
             }
+            canvas.translate(6f * scale, 6f * scale);
+            canvas.scale(scale, scale);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
-            paint.setStrokeWidth(dp(2));
+            paint.setStrokeWidth(1.55f);
             paint.setColor(palette.sub);
-            canvas.drawLine(cx - dp(7), cy + dp(2), cx - dp(7), cy - dp(6), paint);
-            canvas.drawLine(cx - dp(2), cy + dp(1), cx - dp(2), cy - dp(10), paint);
-            canvas.drawLine(cx + dp(3), cy + dp(1), cx + dp(3), cy - dp(8), paint);
-            canvas.drawLine(cx + dp(8), cy + dp(4), cx + dp(8), cy - dp(3), paint);
+            canvas.drawLine(6f, 15f, 6f, 8f, paint);
+            canvas.drawLine(10f, 14f, 10f, 5f, paint);
+            canvas.drawLine(14f, 14f, 14f, 4.5f, paint);
+            canvas.drawLine(18f, 15f, 18f, 8f, paint);
             path.reset();
-            path.moveTo(cx - dp(12), cy + dp(2));
-            path.quadTo(cx - dp(17), cy - dp(3), cx - dp(12), cy - dp(7));
-            path.quadTo(cx - dp(9), cy - dp(2), cx - dp(8), cy + dp(7));
-            path.quadTo(cx - dp(6), cy + dp(15), cx + dp(2), cy + dp(16));
-            path.quadTo(cx + dp(11), cy + dp(15), cx + dp(12), cy + dp(5));
+            path.moveTo(6f, 15f);
+            path.cubicTo(4.7f, 13.5f, 3.2f, 13.1f, 2.3f, 14f);
+            path.cubicTo(1.5f, 14.9f, 1.8f, 16.1f, 2.9f, 17.2f);
+            path.lineTo(6.1f, 20.2f);
+            path.cubicTo(8f, 22f, 10.3f, 23f, 13.7f, 23f);
+            path.cubicTo(18.6f, 23f, 21f, 20f, 21f, 15.6f);
+            path.lineTo(21f, 10f);
+            path.cubicTo(21f, 8.7f, 20.1f, 7.8f, 19f, 7.8f);
+            path.cubicTo(18.4f, 7.8f, 18f, 8.2f, 18f, 8.9f);
             canvas.drawPath(path, paint);
             canvas.restore();
         }
@@ -1739,12 +1745,13 @@ public final class MainActivity extends Activity {
         private void drawSun(Canvas canvas, float cx, float cy, float scale) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeWidth(dp(2));
+            paint.setStrokeWidth(getWidth() / 36f * 1.55f);
             paint.setColor(palette.sub);
-            float radius = dp(5) * scale;
+            float unit = getWidth() / 36f;
+            float radius = unit * 4.2f * scale;
             canvas.drawCircle(cx, cy, radius, paint);
-            float inner = dp(11) * scale;
-            float outer = dp(15) * scale;
+            float inner = unit * 9.2f * scale;
+            float outer = unit * 12.5f * scale;
             for (int i = 0; i < 8; i++) {
                 double angle = i * Math.PI / 4d;
                 float x1 = cx + (float) Math.cos(angle) * inner;
@@ -1758,27 +1765,29 @@ public final class MainActivity extends Activity {
         private void drawMoon(Canvas canvas) {
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
+            float unit = getWidth() / 36f;
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(palette.sub);
-            canvas.drawCircle(cx - dp(2), cy, dp(10), paint);
+            canvas.drawCircle(cx - unit * 1.8f, cy, unit * 7.8f, paint);
             paint.setColor(palette.surface);
-            canvas.drawCircle(cx + dp(3), cy - dp(3), dp(10), paint);
+            canvas.drawCircle(cx + unit * 2.2f, cy - unit * 2.3f, unit * 7.8f, paint);
         }
 
         private void drawAuto(Canvas canvas) {
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            drawSun(canvas, cx, cy, 0.72f);
+            float unit = getWidth() / 36f;
+            drawSun(canvas, cx, cy, 0.62f);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeWidth(dp(2));
+            paint.setStrokeWidth(unit * 1.45f);
             paint.setColor(palette.sub);
-            oval.set(cx - dp(15), cy - dp(15), cx + dp(15), cy + dp(15));
-            canvas.drawArc(oval, 205, 250, false, paint);
+            oval.set(cx - unit * 12.5f, cy - unit * 12.5f, cx + unit * 12.5f, cy + unit * 12.5f);
+            canvas.drawArc(oval, 210, 245, false, paint);
             path.reset();
-            path.moveTo(cx - dp(13), cy + dp(11));
-            path.lineTo(cx - dp(17), cy + dp(12));
-            path.lineTo(cx - dp(15), cy + dp(8));
+            path.moveTo(cx - unit * 10.4f, cy + unit * 9.4f);
+            path.lineTo(cx - unit * 13.9f, cy + unit * 10.3f);
+            path.lineTo(cx - unit * 12.1f, cy + unit * 6.9f);
             canvas.drawPath(path, paint);
         }
     }
