@@ -167,7 +167,9 @@ public final class MainActivity extends Activity {
         rescheduleFutureReminders();
         buildChrome();
         renderAll(false);
-        startSync();
+        if (GoogleSignIn.getLastSignedInAccount(this) != null) {
+            startSync();
+        }
     }
 
     @Override
