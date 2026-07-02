@@ -31,6 +31,8 @@ final class TodoTask {
     long reminderAt;
     String reminderRepeatUnit = REPEAT_NONE;
     int reminderRepeatEvery = 1;
+    long updatedAt = System.currentTimeMillis();
+    boolean deleted;
 
     double score() {
         double s = ((double) impactValue(impact) / effortValue(effort)) + (urgent ? 1000 : 0);
@@ -72,6 +74,8 @@ final class TodoTask {
         json.put("reminderAt", reminderAt);
         json.put("reminderRepeatUnit", reminderRepeatUnit);
         json.put("reminderRepeatEvery", reminderRepeatEvery);
+        json.put("updatedAt", updatedAt);
+        json.put("deleted", deleted);
         return json;
     }
 
@@ -92,6 +96,8 @@ final class TodoTask {
         task.reminderAt = json.optLong("reminderAt", 0);
         task.reminderRepeatUnit = normalizeRepeatUnit(json.optString("reminderRepeatUnit", REPEAT_NONE));
         task.reminderRepeatEvery = Math.max(1, json.optInt("reminderRepeatEvery", 1));
+        task.updatedAt = json.optLong("updatedAt", task.createdAt);
+        task.deleted = json.optBoolean("deleted", false);
         return task;
     }
 
@@ -174,5 +180,9 @@ final class TodoTask {
             return every == 1 ? "week" : "weeks";
         }
         return every == 1 ? "day" : "days";
+    }
+
+    void touch() {
+        updatedAt = System.currentTimeMillis();
     }
 }

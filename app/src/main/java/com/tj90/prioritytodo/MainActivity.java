@@ -1,6 +1,7 @@
 package com.tj90.prioritytodo;
 
 import android.Manifest;
+import android.accounts.Account;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -8,6 +9,7 @@ import android.app.DatePickerDialog;
 import android.app.NotificationManager;
 import android.app.TimePickerDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -44,6 +46,13 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
+import com.google.android.gms.auth.api.signin.GoogleSignInClient;
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
+import com.google.android.gms.common.api.Scope;
+import com.google.android.gms.tasks.Task;
+
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -77,6 +86,11 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private TaskStore store;
+    private SyncManager syncManager;
+    private GoogleSignInClient signInClient;
+    private static final int RC_SIGN_IN = 9001;
+    private static final Scope DRIVE_APPDATA =
+            new Scope("https://www.googleapis.com/auth/drive.appdata");
     private PriorityPalette palette;
     private String theme = THEME_DAY;
     private String hand = HAND_RIGHT;
@@ -85,6 +99,7 @@ public final class MainActivity extends Activity {
     private TextView headerSubView;
     private HeaderIconButton handPill;
     private HeaderIconButton themePill;
+    private HeaderIconButton syncPill;
     private View progressFill;
     private TextView progressText;
     private LinearLayout heroContainer;
@@ -137,14 +152,30 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         store = new TaskStore(this);
+        syncManager = new SyncManager(this, store);
+        GoogleSignInOptions options = new GoogleSignInOptions
+                .Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestEmail()
+                .requestScopes(DRIVE_APPDATA)
+                .build();
+        signInClient = GoogleSignIn.getClient(this, options);
         loadPrefs();
         palette = activePalette();
-        tasks.addAll(store.load());
+        reloadTasksFromStore();
         requestNotificationPermission();
         createNotificationChannel();
         rescheduleFutureReminders();
         buildChrome();
         renderAll(false);
+        startSync();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (GoogleSignIn.getLastSignedInAccount(this) != null) {
+            startSync();
+        }
     }
 
     // ===================== prefs / theme =====================
@@ -282,8 +313,11 @@ public final class MainActivity extends Activity {
         handPill.setOnClickListener(v -> toggleHand());
         themePill = new HeaderIconButton(this, "theme");
         themePill.setOnClickListener(v -> cycleTheme());
+        syncPill = new HeaderIconButton(this, "sync");
+        syncPill.setOnClickListener(v -> startSync());
         toggles.addView(handPill, wrap(0, 0, 6, 0));
-        toggles.addView(themePill, wrap(0, 0, 0, 0));
+        toggles.addView(themePill, wrap(0, 0, 6, 0));
+        toggles.addView(syncPill, wrap(0, 0, 0, 0));
         header.addView(toggles, wrap(0, 0, 0, 0));
         return header;
     }
@@ -370,6 +404,9 @@ public final class MainActivity extends Activity {
         }
         if (themePill != null) {
             themePill.setState(hand, theme);
+        }
+        if (syncPill != null) {
+            syncPill.setState(hand, theme);
         }
 
         renderHero(mit, mitCat, pct, done, total);
@@ -717,6 +754,7 @@ public final class MainActivity extends Activity {
         task.completed = true;
         task.snoozed = false;
         ReminderScheduler.cancel(this, task);
+        task.touch();
         store.save(tasks);
         renderAll(true);
         showToast("Completed", "complete", id);
@@ -728,6 +766,7 @@ public final class MainActivity extends Activity {
             return;
         }
         task.snoozed = true;
+        task.touch();
         store.save(tasks);
         renderAll(true);
         showToast("Moved to Later", "later", id);
@@ -745,6 +784,7 @@ public final class MainActivity extends Activity {
             } else {
                 task.snoozed = false;
             }
+            task.touch();
             store.save(tasks);
             renderAll(true);
         }
@@ -1329,6 +1369,7 @@ public final class MainActivity extends Activity {
         task.reminderRepeatUnit = draftReminderAt > 0 ? draftRepeatUnit : TodoTask.REPEAT_NONE;
         task.reminderRepeatEvery = TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)
                 ? 1 : Math.max(1, draftRepeatEvery);
+        task.touch();
         if (isNew) {
             tasks.add(task);
         }
@@ -1352,6 +1393,8 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (dialog, which) -> {
                     ReminderScheduler.cancel(this, task);
+                    task.deleted = true;
+                    task.touch();
                     tasks.remove(task);
                     store.save(tasks);
                     closeSheet();
@@ -1609,6 +1652,76 @@ public final class MainActivity extends Activity {
         return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(new Date(millis));
     }
 
+    private void startSync() {
+        GoogleSignInAccount signedIn = GoogleSignIn.getLastSignedInAccount(this);
+        if (signedIn == null || signedIn.getAccount() == null
+                || !GoogleSignIn.hasPermissions(signedIn, DRIVE_APPDATA)) {
+            startActivityForResult(signInClient.getSignInIntent(), RC_SIGN_IN);
+            return;
+        }
+        runSync(signedIn.getAccount());
+    }
+
+    private void runSync(Account account) {
+        syncManager.sync(account, new SyncManager.Callback() {
+            @Override
+            public void onSynced(java.util.List<TodoTask> merged) {
+                onTasksReplaced(merged);
+            }
+
+            @Override
+            public void onError(Exception error) {
+                android.widget.Toast.makeText(
+                        MainActivity.this,
+                        "Sync failed: " + error.getMessage(),
+                        android.widget.Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RC_SIGN_IN) {
+            Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(data);
+            try {
+                GoogleSignInAccount account = task.getResult(
+                        com.google.android.gms.common.api.ApiException.class);
+                if (account != null && account.getAccount() != null) {
+                    runSync(account.getAccount());
+                }
+            } catch (com.google.android.gms.common.api.ApiException e) {
+                android.widget.Toast.makeText(this,
+                        "Sign-in failed", android.widget.Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private void onTasksReplaced(java.util.List<TodoTask> merged) {
+        store.persist(mergedWithTombstones(merged));
+        reloadTasksFromStore();
+    }
+
+    private java.util.List<TodoTask> mergedWithTombstones(java.util.List<TodoTask> visible) {
+        java.util.Map<String, TodoTask> byId = new java.util.LinkedHashMap<>();
+        for (TodoTask task : store.loadAll()) {
+            byId.put(task.id, task);
+        }
+        for (TodoTask task : visible) {
+            byId.put(task.id, task);
+        }
+        return new java.util.ArrayList<>(byId.values());
+    }
+
+    private void reloadTasksFromStore() {
+        tasks.clear();
+        tasks.addAll(store.load());
+        sortTasks();
+        if (headerSubView != null && listContainer != null) {
+            renderAll(true);
+        }
+    }
+
     // ===================== reminders bootstrap (unchanged behavior) =====================
 
     private void requestNotificationPermission() {
@@ -1634,6 +1747,7 @@ public final class MainActivity extends Activity {
                 long next = task.nextReminderAfter(now);
                 if (next > 0) {
                     task.reminderAt = next;
+                    task.touch();
                     changed = true;
                 }
             }
@@ -1665,6 +1779,8 @@ public final class MainActivity extends Activity {
             this.themeState = themeState;
             if ("hand".equals(kind)) {
                 setContentDescription(HAND_RIGHT.equals(handState) ? "Right hand" : "Left hand");
+            } else if ("sync".equals(kind)) {
+                setContentDescription("Sync tasks");
             } else if (THEME_DAY.equals(themeState)) {
                 setContentDescription("Day theme");
             } else if (THEME_NIGHT.equals(themeState)) {
@@ -1695,6 +1811,8 @@ public final class MainActivity extends Activity {
             canvas.drawOval(oval, paint);
             if ("hand".equals(kind)) {
                 drawHand(canvas);
+            } else if ("sync".equals(kind)) {
+                drawSync(canvas);
             } else {
                 drawTheme(canvas);
             }
@@ -1740,6 +1858,30 @@ public final class MainActivity extends Activity {
             } else {
                 drawSun(canvas, getWidth() / 2f, getHeight() / 2f, 1f);
             }
+        }
+
+        private void drawSync(Canvas canvas) {
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            float unit = getWidth() / 36f;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(unit * 1.55f);
+            paint.setColor(palette.sub);
+            oval.set(cx - unit * 9.5f, cy - unit * 9.5f, cx + unit * 9.5f, cy + unit * 9.5f);
+            canvas.drawArc(oval, 210, 245, false, paint);
+            canvas.drawArc(oval, 30, 245, false, paint);
+            path.reset();
+            path.moveTo(cx - unit * 8.4f, cy + unit * 8.8f);
+            path.lineTo(cx - unit * 12.2f, cy + unit * 9.5f);
+            path.lineTo(cx - unit * 10.4f, cy + unit * 6.1f);
+            canvas.drawPath(path, paint);
+            path.reset();
+            path.moveTo(cx + unit * 8.4f, cy - unit * 8.8f);
+            path.lineTo(cx + unit * 12.2f, cy - unit * 9.5f);
+            path.lineTo(cx + unit * 10.4f, cy - unit * 6.1f);
+            canvas.drawPath(path, paint);
         }
 
         private void drawSun(Canvas canvas, float cx, float cy, float scale) {
