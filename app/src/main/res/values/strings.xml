@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Priority Todo</string>
+    <string name="app_name">Clearflow</string>
     <string name="notification_channel_name">Task reminders</string>
 </resources>
