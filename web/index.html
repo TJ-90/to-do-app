@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://accounts.google.com; connect-src https://www.googleapis.com https://accounts.google.com; style-src 'self'; img-src 'self' data:; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'" />
+  <title>Priority Todo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Priority Todo</h1>
+    <div class="sync-area">
+      <button id="sync-btn" class="sync-btn">Sync</button>
+      <span id="sync-status" class="sync-status"></span>
+    </div>
+  </header>
+
+  <section class="mit-band">
+    <span class="mit-label">Now</span>
+    <span id="mit" class="mit-title">No active task</span>
+  </section>
+
+  <main>
+    <div id="task-list" class="task-list"></div>
+  </main>
+
+  <form id="add-form" class="add-form" autocomplete="off">
+    <input id="f-title" type="text" placeholder="New task" maxlength="500" required />
+    <select id="f-impact" aria-label="Impact">
+      <option value="H">Impact: High</option>
+      <option value="M">Impact: Medium</option>
+      <option value="L">Impact: Low</option>
+    </select>
+    <select id="f-effort" aria-label="Effort">
+      <option value="H">Effort: High</option>
+      <option value="M" selected>Effort: Medium</option>
+      <option value="L">Effort: Low</option>
+    </select>
+    <label class="urgent"><input id="f-urgent" type="checkbox" /> Urgent</label>
+    <button type="submit" class="commit">Add</button>
+  </form>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="config.js"></script>
+  <script src="sync.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
