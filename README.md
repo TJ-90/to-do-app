@@ -41,6 +41,17 @@ Buckets:
 - Manual day/night mode toggle.
 - Minimal black, white, light-grey, and red UI treatment.
 
+## Sync & Web
+
+Priority Todo now syncs Android and web through your own Google Drive.
+
+- One private JSON file (`priority-todo.json`) lives in Drive's hidden `appDataFolder` — only this app, signed in as you, can read it. No server, no shared database.
+- OAuth scope is `drive.appdata` only: the app cannot see any other file in your Drive.
+- Web app is a static page under `web/`, deployed to GitHub Pages.
+- To share with a friend: they open the same web URL and sign in with THEIR Google account, or install the APK and sign in. Their tasks stay in their own Drive — fully isolated from yours.
+
+Setup (one-time Google Cloud config): see [web/SETUP.md](web/SETUP.md).
+
 ## Build
 
 The repository includes a GitHub Actions workflow that builds the debug APK on every push to `main`, pull request, or manual workflow dispatch.
