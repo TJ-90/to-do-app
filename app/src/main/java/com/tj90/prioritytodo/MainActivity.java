@@ -31,6 +31,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
@@ -39,6 +40,7 @@ import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -133,6 +135,15 @@ public final class MainActivity extends Activity {
     private TextView commitButton;
     private boolean detailsAnimating;
 
+    // ---- lists / categories ----
+    private final List<String> categories = new ArrayList<>();
+    private String activeCat = "All";
+    private String addCatDraft;      // null = not adding a list; "" or text while adding
+    private String draftCategory;    // sheet draft: the task's list, null = All / unassigned
+    private LinearLayout catStrip;
+    private EditText addCatInput;
+    private LinearLayout listChipsRow;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -140,6 +151,7 @@ public final class MainActivity extends Activity {
         loadPrefs();
         palette = activePalette();
         tasks.addAll(store.load());
+        categories.addAll(store.loadCategories());
         requestNotificationPermission();
         createNotificationChannel();
         rescheduleFutureReminders();
@@ -230,6 +242,8 @@ public final class MainActivity extends Activity {
         root.addView(column, columnParams);
 
         column.addView(buildHeader(), matchWrap(0, 0, 0, 0));
+        catStrip = vertical();
+        column.addView(catStrip, matchWrap(0, 4, 0, 0));
         heroContainer = vertical();
         column.addView(heroContainer, matchWrap(16, 8, 16, 4));
 
@@ -356,7 +370,12 @@ public final class MainActivity extends Activity {
     private void renderAll(boolean animateReorder) {
         sortTasks();
         List<TodoTask> active = activeTasks();
-        int total = tasks.size();
+        int total = 0;
+        for (TodoTask t : tasks) {
+            if (inActiveCat(t)) {
+                total++;
+            }
+        }
         int remaining = active.size();
         int done = total - remaining;
         int pct = total == 0 ? 0 : Math.round((done / (float) total) * 100f);
@@ -371,6 +390,7 @@ public final class MainActivity extends Activity {
         if (themePill != null) {
             themePill.setState(hand, theme);
         }
+        renderCategoryStrip();
 
         renderHero(mit, mitCat, pct, done, total);
         renderList(active, animateReorder);
@@ -826,6 +846,294 @@ public final class MainActivity extends Activity {
         }
     }
 
+    // ===================== lists / categories =====================
+
+    private boolean inActiveCat(TodoTask task) {
+        return "All".equals(activeCat) || activeCat.equals(task.category);
+    }
+
+    private List<String> tabList() {
+        List<String> out = new ArrayList<>();
+        out.add("All");
+        out.addAll(categories);
+        return out;
+    }
+
+    private int catCount(String name) {
+        int count = 0;
+        for (TodoTask task : tasks) {
+            if (!task.completed && ("All".equals(name) || name.equals(task.category))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void renderCategoryStrip() {
+        if (catStrip == null) {
+            return;
+        }
+        catStrip.removeAllViews();
+        if (addCatDraft != null) {
+            catStrip.addView(buildAddCatRow(), matchWrap(0, 0, 0, 0));
+            return;
+        }
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = horizontal();
+        row.setPadding(dp(16), dp(2), dp(16), dp(4));
+        List<String> tabs = tabList();
+        for (int i = 0; i < tabs.size(); i++) {
+            row.addView(buildCatTab(tabs.get(i)), wrap(0, 0, 7, 0));
+        }
+        row.addView(buildAddCatButton());
+        scroll.addView(row, new HorizontalScrollView.LayoutParams(
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT));
+        catStrip.addView(scroll, matchWrap(0, 0, 0, 0));
+    }
+
+    private View buildCatTab(String name) {
+        boolean active = name.equals(activeCat);
+        LinearLayout tab = horizontal();
+        tab.setPadding(dp(13), dp(7), dp(13), dp(7));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(999));
+        if (active) {
+            bg.setColor(palette.accent);
+            bg.setStroke(dp(2), palette.accent);
+        } else {
+            bg.setColor(Color.TRANSPARENT);
+            bg.setStroke(dp(2), palette.line);
+        }
+        tab.setBackground(bg);
+
+        TextView label = text(name, 13, active ? 800 : 700, active ? palette.accentInk : palette.sub);
+        label.setIncludeFontPadding(false);
+        tab.addView(label, wrap(0, 0, 0, 0));
+
+        int n = catCount(name);
+        if (n > 0) {
+            TextView badge = text(String.valueOf(n), 10, 800, active ? palette.accentInk : palette.sub);
+            badge.setIncludeFontPadding(false);
+            badge.setPadding(dp(5), dp(2), dp(5), dp(2));
+            GradientDrawable badgeBg = new GradientDrawable();
+            badgeBg.setCornerRadius(dp(999));
+            badgeBg.setColor(PriorityPalette.withAlpha(active ? palette.accentInk : palette.sub, 0x2E));
+            badge.setBackground(badgeBg);
+            tab.addView(badge, wrap(6, 0, 0, 0));
+        }
+
+        tab.setOnClickListener(v -> switchCat(name));
+        if (!"All".equals(name)) {
+            tab.setOnLongClickListener(v -> {
+                confirmDeleteCat(name);
+                return true;
+            });
+        }
+        return tab;
+    }
+
+    private View buildAddCatButton() {
+        TextView btn = new TextView(this);
+        btn.setText("+");
+        btn.setTextSize(17);
+        applyFont(btn, 700);
+        btn.setTextColor(palette.sub);
+        btn.setGravity(Gravity.CENTER);
+        btn.setIncludeFontPadding(false);
+        btn.setContentDescription("Add list");
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(Color.TRANSPARENT);
+        bg.setStroke(dp(2), PriorityPalette.withAlpha(palette.sub, 0x73), dp(4), dp(3));
+        btn.setBackground(bg);
+        btn.setOnClickListener(v -> openAddCat());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        lp.gravity = Gravity.CENTER_VERTICAL;
+        btn.setLayoutParams(lp);
+        return btn;
+    }
+
+    private View buildAddCatRow() {
+        LinearLayout row = horizontal();
+        row.setPadding(dp(16), dp(2), dp(16), dp(4));
+
+        LinearLayout field = horizontal();
+        field.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable fieldBg = new GradientDrawable();
+        fieldBg.setColor(palette.bg);
+        fieldBg.setCornerRadius(dp(14));
+        fieldBg.setStroke(dp(2), palette.accent);
+        field.setBackground(fieldBg);
+
+        final EditText input = new EditText(this);
+        input.setHint("New list name");
+        input.setText(addCatDraft == null ? "" : addCatDraft);
+        input.setSingleLine(true);
+        input.setBackground(null);
+        input.setPadding(0, 0, 0, 0);
+        input.setTextSize(14);
+        applyFont(input, 700);
+        input.setTextColor(palette.ink);
+        input.setHintTextColor(palette.sub);
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                addCatDraft = s.toString();
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            commitAddCat();
+            return true;
+        });
+        addCatInput = input;
+        field.addView(input, weight(1, 0, 0, 0, 0));
+        row.addView(field, weight(1, 0, 0, 8, 0));
+
+        TextView add = text("Add", 13, 800, palette.accentInk);
+        add.setPadding(dp(13), dp(9), dp(13), dp(9));
+        GradientDrawable addBg = new GradientDrawable();
+        addBg.setColor(palette.accent);
+        addBg.setCornerRadius(dp(12));
+        add.setBackground(addBg);
+        add.setOnClickListener(v -> commitAddCat());
+        row.addView(add, wrap(0, 0, 8, 0));
+
+        TextView cancel = text("✕", 15, 700, palette.sub);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setPadding(dp(10), dp(9), dp(10), dp(9));
+        GradientDrawable cancelBg = new GradientDrawable();
+        cancelBg.setColor(Color.TRANSPARENT);
+        cancelBg.setCornerRadius(dp(12));
+        cancelBg.setStroke(dp(2), palette.line);
+        cancel.setBackground(cancelBg);
+        cancel.setOnClickListener(v -> cancelAddCat());
+        row.addView(cancel, wrap(0, 0, 0, 0));
+
+        input.requestFocus();
+        input.post(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
+        return row;
+    }
+
+    private void openAddCat() {
+        addCatDraft = "";
+        renderCategoryStrip();
+    }
+
+    private void cancelAddCat() {
+        hideCatKeyboard();
+        addCatDraft = null;
+        renderCategoryStrip();
+    }
+
+    private void commitAddCat() {
+        String name = addCatDraft == null ? "" : addCatDraft.trim();
+        hideCatKeyboard();
+        if (name.isEmpty()) {
+            addCatDraft = null;
+            renderCategoryStrip();
+            return;
+        }
+        if ("all".equalsIgnoreCase(name)) {
+            addCatDraft = null;
+            switchCat("All");
+            return;
+        }
+        for (String existing : categories) {
+            if (existing.equalsIgnoreCase(name)) {
+                addCatDraft = null;
+                switchCat(existing);
+                return;
+            }
+        }
+        categories.add(name);
+        store.saveCategories(categories);
+        addCatDraft = null;
+        switchCat(name);
+        showCheer("List added");
+    }
+
+    private void switchCat(String name) {
+        if (name.equals(activeCat) && addCatDraft == null) {
+            return;
+        }
+        List<String> tabs = tabList();
+        int fromIndex = tabs.indexOf(activeCat);
+        int toIndex = tabs.indexOf(name);
+        int dir = (fromIndex >= 0 && toIndex >= 0 && toIndex < fromIndex) ? -1 : 1;
+        addCatDraft = null;
+        activeCat = name;
+        renderAll(false);
+        float start = dp(26) * dir;
+        for (View zone : new View[]{heroContainer, listContainer}) {
+            if (zone == null) {
+                continue;
+            }
+            zone.setTranslationX(start);
+            zone.setAlpha(0.35f);
+            zone.animate().translationX(0f).alpha(1f)
+                    .setDuration(340)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        }
+    }
+
+    private void confirmDeleteCat(String name) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete \"" + name + "\"?")
+                .setMessage("The list is removed. Its tasks aren't deleted — they move back to All.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (dialog, which) -> deleteCat(name))
+                .show();
+    }
+
+    private void deleteCat(String name) {
+        categories.remove(name);
+        for (TodoTask task : tasks) {
+            if (name.equals(task.category)) {
+                task.category = null;
+            }
+        }
+        if (name.equals(activeCat)) {
+            activeCat = "All";
+        }
+        store.saveCategories(categories);
+        store.save(tasks);
+        renderAll(false);
+    }
+
+    private void buildListChips() {
+        if (listChipsRow == null) {
+            return;
+        }
+        listChipsRow.removeAllViews();
+        for (int i = 0; i < categories.size(); i++) {
+            String name = categories.get(i);
+            boolean selected = name.equals(draftCategory);
+            TextView chip = chipButton(name, selected, palette.accent, palette.accentInk);
+            chip.setOnClickListener(v -> {
+                draftCategory = name.equals(draftCategory) ? null : name;
+                buildListChips();
+            });
+            listChipsRow.addView(chip, wrap(0, 0, i < categories.size() - 1 ? 8 : 0, 0));
+        }
+    }
+
+    private void hideCatKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null && addCatInput != null) {
+            imm.hideSoftInputFromWindow(addCatInput.getWindowToken(), 0);
+        }
+    }
+
     // ===================== sheet =====================
 
     private void openAddSheet() {
@@ -840,6 +1148,7 @@ public final class MainActivity extends Activity {
         draftReminderAt = 0;
         draftRepeatUnit = TodoTask.REPEAT_NONE;
         draftRepeatEvery = 1;
+        draftCategory = "All".equals(activeCat) ? null : activeCat;
         detailsExpanded = false;
         openSheetWithFabTransition();
     }
@@ -860,6 +1169,7 @@ public final class MainActivity extends Activity {
         draftReminderAt = task.reminderAt;
         draftRepeatUnit = task.reminderRepeatUnit;
         draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
+        draftCategory = task.category;
         detailsExpanded = true;
         presentSheet();
     }
@@ -1007,6 +1317,13 @@ public final class MainActivity extends Activity {
 
         reminderRepeatRow = horizontal();
         content.addView(reminderRepeatRow, matchWrap(0, 6, 0, 0));
+
+        if (!categories.isEmpty()) {
+            content.addView(chipGroupLabel("LIST"), matchWrap(0, 14, 0, 8));
+            listChipsRow = horizontal();
+            buildListChips();
+            content.addView(listChipsRow, matchWrap(0, 0, 0, 0));
+        }
 
         detailsToggle = text("", 12, 800, palette.accent);
         LinearLayout toggleRow = horizontal();
@@ -1323,6 +1640,7 @@ public final class MainActivity extends Activity {
         task.impact = draftImpact;
         task.effort = draftEffort;
         task.dependency = draftDep;
+        task.category = draftCategory;
         task.urgent = draftUrgent;
         task.quickTask = draftQuick;
         task.reminderAt = draftReminderAt;
@@ -1562,7 +1880,7 @@ public final class MainActivity extends Activity {
     private List<TodoTask> activeTasks() {
         List<TodoTask> out = new ArrayList<>();
         for (TodoTask task : tasks) {
-            if (!task.completed) {
+            if (!task.completed && inActiveCat(task)) {
                 out.add(task);
             }
         }

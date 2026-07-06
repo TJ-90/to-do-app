@@ -22,6 +22,7 @@ final class TodoTask {
     String impact = HIGH;
     String effort = MEDIUM;
     String dependency = "None";
+    String category = null;
     boolean urgent;
     boolean quickTask;
     boolean snoozed;
@@ -63,6 +64,11 @@ final class TodoTask {
         json.put("impact", impact);
         json.put("effort", effort);
         json.put("dependency", dependency);
+        if (category == null) {
+            json.put("category", JSONObject.NULL);
+        } else {
+            json.put("category", category);
+        }
         json.put("urgent", urgent);
         json.put("quickTask", quickTask);
         json.put("snoozed", snoozed);
@@ -83,6 +89,12 @@ final class TodoTask {
         task.impact = json.optString("impact", HIGH);
         task.effort = json.optString("effort", MEDIUM);
         task.dependency = json.optString("dependency", "None");
+        if (json.has("category") && !json.isNull("category")) {
+            String cat = json.optString("category", "");
+            task.category = cat.isEmpty() ? null : cat;
+        } else {
+            task.category = null;
+        }
         task.urgent = json.optBoolean("urgent", false);
         task.quickTask = json.optBoolean("quickTask", false);
         task.snoozed = json.optBoolean("snoozed", false);

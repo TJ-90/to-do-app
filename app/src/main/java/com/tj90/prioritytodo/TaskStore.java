@@ -12,6 +12,7 @@ import java.util.List;
 final class TaskStore {
     private static final String PREFS = "priority_todo_store";
     private static final String TASKS = "tasks";
+    private static final String CATEGORIES = "categories";
 
     private final SharedPreferences preferences;
 
@@ -43,5 +44,30 @@ final class TaskStore {
             }
         }
         preferences.edit().putString(TASKS, array.toString()).apply();
+    }
+
+    List<String> loadCategories() {
+        List<String> categories = new ArrayList<>();
+        String raw = preferences.getString(CATEGORIES, "[]");
+        try {
+            JSONArray array = new JSONArray(raw);
+            for (int index = 0; index < array.length(); index++) {
+                String name = array.optString(index, "").trim();
+                if (!name.isEmpty()) {
+                    categories.add(name);
+                }
+            }
+        } catch (JSONException ignored) {
+            preferences.edit().remove(CATEGORIES).apply();
+        }
+        return categories;
+    }
+
+    void saveCategories(List<String> categories) {
+        JSONArray array = new JSONArray();
+        for (String name : categories) {
+            array.put(name);
+        }
+        preferences.edit().putString(CATEGORIES, array.toString()).apply();
     }
 }
