@@ -79,6 +79,34 @@ read title_x title_y < "$SCREENSHOT_DIR/title-input-center.txt"
 adb shell input tap "$title_x" "$title_y"
 sleep 1
 adb shell input text CI_task
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02b-keyboard-open.png"
+adb shell uiautomator dump /sdcard/window-keyboard-open.xml
+adb pull /sdcard/window-keyboard-open.xml "$SCREENSHOT_DIR/window-keyboard-open.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def bounds(node):
+    return list(map(int, re.findall(r"\d+", node.attrib["bounds"])))
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-keyboard-open.xml").getroot()
+save = next(node for node in root.iter("node") if node.attrib.get("text") in {"Add task", "Save"})
+edit = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.EditText")
+save_bounds = bounds(save)
+edit_bounds = bounds(edit)
+
+if save.attrib.get("visible-to-user") == "false":
+    raise AssertionError("Add task action is not visible while the keyboard is open")
+if save_bounds[3] > 900:
+    raise AssertionError(f"Add task action is too low with keyboard open: {save_bounds}")
+if edit_bounds[3] > save_bounds[1]:
+    raise AssertionError(f"Task input overlaps action row: input={edit_bounds}, action={save_bounds}")
+PY
+
 adb shell input keyevent KEYCODE_BACK || true
 sleep 1
 adb shell uiautomator dump /sdcard/window-before-save.xml

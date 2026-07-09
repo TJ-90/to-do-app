@@ -15,6 +15,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -31,6 +32,8 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
@@ -125,6 +128,7 @@ public final class MainActivity extends Activity {
     private FrameLayout sheetOverlay;
     private View sheetScrim;
     private LinearLayout sheetPanel;
+    private ScrollView sheetScroll;
     private EditText sheetInput;
     private TextView landsPill;
     private TextView detailsSummary;
@@ -134,6 +138,7 @@ public final class MainActivity extends Activity {
     private LinearLayout chipsContainer;
     private TextView commitButton;
     private boolean detailsAnimating;
+    private ViewTreeObserver.OnGlobalLayoutListener sheetKeyboardLayoutListener;
 
     // ---- lists / categories ----
     private final List<String> categories = new ArrayList<>();
@@ -1217,7 +1222,7 @@ public final class MainActivity extends Activity {
         sheetOverlay.addView(sheetScrim, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        sheetPanel = vertical();
+        sheetPanel = new KeyboardAwareSheetPanel(this);
         sheetPanel.setPadding(dp(18), dp(8), dp(18), dp(18));
         GradientDrawable panelBg = new GradientDrawable();
         panelBg.setColor(palette.surface);
@@ -1228,16 +1233,18 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         panelParams.gravity = Gravity.BOTTOM;
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setVerticalScrollBarEnabled(false);
+        sheetScroll = new ScrollView(this);
+        sheetScroll.setFillViewport(false);
+        sheetScroll.setVerticalScrollBarEnabled(false);
         LinearLayout content = vertical();
         buildSheetContent(content);
-        scroll.addView(content, new ScrollView.LayoutParams(
+        sheetScroll.addView(content, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        sheetPanel.addView(scroll, matchWrap(0, 0, 0, 0));
+        sheetPanel.addView(sheetScroll, matchWrap(0, 0, 0, 0));
 
         sheetOverlay.addView(sheetPanel, panelParams);
         root.addView(sheetOverlay, overlayParams);
+        attachSheetKeyboardHandling();
 
         sheetScrim.setAlpha(0f);
         sheetScrim.animate().alpha(1f).setDuration(180).start();
@@ -1291,6 +1298,7 @@ public final class MainActivity extends Activity {
         sheetInput.setHint("What needs doing?");
         sheetInput.setText(draftName);
         sheetInput.setSingleLine(true);
+        sheetInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         sheetInput.setTextSize(16);
         sheetInput.setTextColor(palette.ink);
         sheetInput.setHintTextColor(palette.sub);
@@ -1307,6 +1315,15 @@ public final class MainActivity extends Activity {
                 updateSheetDynamic();
             }
             @Override public void afterTextChanged(Editable s) { }
+        });
+        sheetInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                if (draftName.trim().length() > 0) {
+                    commitSheet();
+                }
+                return true;
+            }
+            return false;
         });
         content.addView(sheetInput, matchWrap(0, 0, 0, 0));
 
@@ -1688,6 +1705,7 @@ public final class MainActivity extends Activity {
             imm.hideSoftInputFromWindow(sheetInput.getWindowToken(), 0);
         }
         final FrameLayout overlay = sheetOverlay;
+        detachSheetKeyboardHandling();
         sheetScrim.animate().alpha(0f).setDuration(160).start();
         sheetPanel.animate().translationY(sheetPanel.getHeight()).setDuration(220)
                 .withEndAction(() -> {
@@ -1700,6 +1718,7 @@ public final class MainActivity extends Activity {
 
     private void removeSheetImmediate() {
         if (sheetOverlay != null) {
+            detachSheetKeyboardHandling();
             root.removeView(sheetOverlay);
             sheetOverlay = null;
         }
@@ -1756,6 +1775,98 @@ public final class MainActivity extends Activity {
     }
 
     // ===================== sheet helpers =====================
+
+    private void attachSheetKeyboardHandling() {
+        if (sheetOverlay == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            sheetOverlay.setOnApplyWindowInsetsListener((view, insets) -> {
+                updateSheetForKeyboardInset(insets.getInsets(WindowInsets.Type.ime()).bottom);
+                return insets;
+            });
+        }
+        sheetKeyboardLayoutListener = () -> updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
+        sheetOverlay.getViewTreeObserver().addOnGlobalLayoutListener(sheetKeyboardLayoutListener);
+        sheetOverlay.post(() -> {
+            updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                sheetOverlay.requestApplyInsets();
+            }
+        });
+    }
+
+    private void detachSheetKeyboardHandling() {
+        if (sheetOverlay == null || sheetKeyboardLayoutListener == null) {
+            sheetKeyboardLayoutListener = null;
+            return;
+        }
+        sheetOverlay.getViewTreeObserver().removeOnGlobalLayoutListener(sheetKeyboardLayoutListener);
+        sheetKeyboardLayoutListener = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            sheetOverlay.setOnApplyWindowInsetsListener(null);
+        }
+    }
+
+    private int visibleKeyboardInset(View view) {
+        if (view == null) {
+            return 0;
+        }
+        Rect visibleFrame = new Rect();
+        view.getWindowVisibleDisplayFrame(visibleFrame);
+        int inset = Math.max(0, view.getRootView().getHeight() - visibleFrame.bottom);
+        return inset >= dp(120) ? inset : 0;
+    }
+
+    private void updateSheetForKeyboardInset(int keyboardInsetPx) {
+        if (sheetPanel == null || root == null) {
+            return;
+        }
+        SheetKeyboardFrame frame = sheetKeyboardFrame(
+                root.getHeight(), keyboardInsetPx, dp(8), dp(12), dp(180));
+        ViewGroup.LayoutParams rawParams = sheetPanel.getLayoutParams();
+        if (!(rawParams instanceof FrameLayout.LayoutParams)) {
+            return;
+        }
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) rawParams;
+        if (params.bottomMargin != frame.bottomMarginPx) {
+            params.bottomMargin = frame.bottomMarginPx;
+            sheetPanel.setLayoutParams(params);
+        }
+        if (sheetPanel instanceof KeyboardAwareSheetPanel) {
+            ((KeyboardAwareSheetPanel) sheetPanel).setMaxHeightPx(frame.maxHeightPx);
+        }
+        if (sheetScroll != null && sheetInput != null) {
+            sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, sheetInput.getTop()));
+        }
+    }
+
+    static SheetKeyboardFrame sheetKeyboardFrame(
+            int rootHeightPx,
+            int keyboardInsetPx,
+            int keyboardGapPx,
+            int topGapPx,
+            int fallbackHeightPx) {
+        int inset = Math.max(0, keyboardInsetPx);
+        int bottomMargin = inset > 0 ? inset + Math.max(0, keyboardGapPx) : 0;
+        int maxHeight;
+        if (rootHeightPx > 0) {
+            maxHeight = Math.max(0, rootHeightPx - bottomMargin - Math.max(0, topGapPx));
+        } else {
+            maxHeight = Math.max(0, fallbackHeightPx);
+        }
+        return new SheetKeyboardFrame(bottomMargin, maxHeight);
+    }
+
+    static final class SheetKeyboardFrame {
+        final int bottomMarginPx;
+        final int maxHeightPx;
+
+        SheetKeyboardFrame(int bottomMarginPx, int maxHeightPx) {
+            this.bottomMarginPx = bottomMarginPx;
+            this.maxHeightPx = maxHeightPx;
+        }
+    }
 
     private String predictBucket() {
         TodoTask probe = new TodoTask();
@@ -2107,6 +2218,37 @@ public final class MainActivity extends Activity {
             path.lineTo(cx - unit * 13.9f, cy + unit * 10.3f);
             path.lineTo(cx - unit * 12.1f, cy + unit * 6.9f);
             canvas.drawPath(path, paint);
+        }
+    }
+
+    private static final class KeyboardAwareSheetPanel extends LinearLayout {
+        private int maxHeightPx = Integer.MAX_VALUE;
+
+        KeyboardAwareSheetPanel(Context context) {
+            super(context);
+            setOrientation(LinearLayout.VERTICAL);
+        }
+
+        void setMaxHeightPx(int maxHeightPx) {
+            int resolved = maxHeightPx > 0 ? maxHeightPx : Integer.MAX_VALUE;
+            if (this.maxHeightPx == resolved) {
+                return;
+            }
+            this.maxHeightPx = resolved;
+            requestLayout();
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int constrainedHeightSpec = heightMeasureSpec;
+            if (maxHeightPx < Integer.MAX_VALUE) {
+                int mode = MeasureSpec.getMode(heightMeasureSpec);
+                int size = MeasureSpec.getSize(heightMeasureSpec);
+                if (mode == MeasureSpec.UNSPECIFIED || size > maxHeightPx) {
+                    constrainedHeightSpec = MeasureSpec.makeMeasureSpec(maxHeightPx, MeasureSpec.AT_MOST);
+                }
+            }
+            super.onMeasure(widthMeasureSpec, constrainedHeightSpec);
         }
     }
 

@@ -59,4 +59,22 @@ public final class TodoTaskTest {
         assertTrue(urgent.score() > normal.score());
         assertEquals("Immediate", urgent.bucket());
     }
+
+    @Test
+    public void sheetKeyboardFrameKeepsPanelAboveImeAndWithinScreen() {
+        MainActivity.SheetKeyboardFrame frame = MainActivity.sheetKeyboardFrame(
+                1280, 520, 8, 12, 180);
+
+        assertEquals(528, frame.bottomMarginPx);
+        assertEquals(740, frame.maxHeightPx);
+    }
+
+    @Test
+    public void sheetKeyboardFrameUsesNaturalHeightWhenImeIsHidden() {
+        MainActivity.SheetKeyboardFrame frame = MainActivity.sheetKeyboardFrame(
+                1280, 0, 8, 12, 180);
+
+        assertEquals(0, frame.bottomMarginPx);
+        assertEquals(1268, frame.maxHeightPx);
+    }
 }
