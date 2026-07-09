@@ -31,10 +31,12 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
@@ -46,6 +48,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -110,6 +113,13 @@ public final class MainActivity extends Activity {
     private View fabTarget;
     private View reachArc;
 
+    // ---- FAB drag-to-reposition ----
+    private boolean fabDragging;
+    private boolean fabMoved;
+    private float fabDownRawX;
+    private float fabDownRawY;
+    private Runnable fabLongPressRunnable;
+
     private final Map<String, Integer> rowTops = new HashMap<>();
 
     private ConfettiView confettiView;
@@ -146,6 +156,8 @@ public final class MainActivity extends Activity {
     private TextView detailsSummary;
     private TextView detailsToggle;
     private TextView remindChip;
+    private TextView remindClear;
+    private ValueAnimator adjustPulse;
     private LinearLayout reminderRepeatRow;
     private LinearLayout chipsContainer;
     private TextView commitButton;
@@ -164,6 +176,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // The add/edit sheet is a bottom overlay that positions itself above the keyboard
+        // manually (see sheetKeyboardFrame). Pin ADJUST_NOTHING so the window itself does
+        // not also pan/resize for the IME — otherwise the two offsets stack and the sheet
+        // floats up with a gap above the keyboard.
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         store = new TaskStore(this);
         loadPrefs();
         palette = activePalette();
@@ -224,16 +241,26 @@ public final class MainActivity extends Activity {
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("Welcome to Clearflow")
-                .setMessage("Add one task, then use Adjust when the default guess is wrong.\n\n"
-                        + "Quick win means low-effort work you can finish fast.\n"
-                        + "Urgent means it jumps to the top because it needs attention now.\n\n"
-                        + "Move the + button with the hand button. Use Import and Export for CSV backups or moving tasks between installs.")
-                .setPositiveButton("Start", (dialog, which) -> markOnboarded())
+                .setTitle("Welcome 👋")
+                .setMessage("Tap  +  to add a task — it auto-sorts to the top.\n\n"
+                        + "Mark it Urgent to jump to #1.\n"
+                        + "Swipe a task to finish it.")
+                .setPositiveButton("Got it", (dialog, which) -> markOnboarded())
                 .setNegativeButton("Import CSV", (dialog, which) -> {
                     markOnboarded();
                     startCsvImport();
                 })
+                .show();
+    }
+
+    private void showHowItWorks() {
+        new AlertDialog.Builder(this)
+                .setTitle("How it works")
+                .setMessage("• Tap  +  to add a task. It sorts itself by priority.\n\n"
+                        + "• Tap Adjust to set impact & effort, or mark it Urgent to send it to #1.\n\n"
+                        + "• Swipe a task toward your thumb to finish it, the other way for Later.\n\n"
+                        + "• Drag the  +  button (or tap the hand icon) to switch it between left, center and right.")
+                .setPositiveButton("Close", null)
                 .show();
     }
 
@@ -343,32 +370,55 @@ public final class MainActivity extends Activity {
 
     private LinearLayout buildHeader() {
         LinearLayout header = horizontal();
-        header.setPadding(dp(24), dp(18), dp(20), dp(4));
-        header.setGravity(Gravity.TOP);
+        header.setPadding(dp(24), dp(20), dp(16), dp(4));
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
         LinearLayout titleCol = vertical();
-        TextView today = text("Today", 23, 800, palette.ink);
+        TextView today = text("Today", 24, 800, palette.ink);
         today.setIncludeFontPadding(false);
         headerSubView = text("", 13, 600, palette.sub);
         titleCol.addView(today);
-        titleCol.addView(headerSubView, matchWrap(0, 5, 0, 0));
+        titleCol.addView(headerSubView, matchWrap(0, 4, 0, 0));
         header.addView(titleCol, weight(1, 0, 0, 0, 0));
 
+        // Minimal icon-only cluster. Import/Export live in the overflow menu so the
+        // header stays uncluttered.
         LinearLayout toggles = horizontal();
-        TextView importCsv = headerTextButton("Import");
-        importCsv.setOnClickListener(v -> startCsvImport());
-        TextView exportCsv = headerTextButton("Export");
-        exportCsv.setOnClickListener(v -> startCsvExport());
-        handPill = new HeaderIconButton(this, "hand");
-        handPill.setOnClickListener(v -> toggleHand());
         themePill = new HeaderIconButton(this, "theme");
         themePill.setOnClickListener(v -> cycleTheme());
-        toggles.addView(importCsv, wrap(0, 0, 6, 0));
-        toggles.addView(exportCsv, wrap(0, 0, 6, 0));
-        toggles.addView(handPill, wrap(0, 0, 6, 0));
-        toggles.addView(themePill, wrap(0, 0, 0, 0));
+        handPill = new HeaderIconButton(this, "hand");
+        handPill.setOnClickListener(v -> toggleHand());
+        HeaderIconButton more = new HeaderIconButton(this, "more");
+        more.setContentDescription("More options");
+        more.setOnClickListener(this::showOverflowMenu);
+        toggles.addView(themePill, wrap(0, 0, 8, 0));
+        toggles.addView(handPill, wrap(0, 0, 8, 0));
+        toggles.addView(more, wrap(0, 0, 0, 0));
         header.addView(toggles, wrap(0, 0, 0, 0));
         return header;
+    }
+
+    private void showOverflowMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(0, 1, 0, "Import CSV");
+        menu.getMenu().add(0, 2, 1, "Export CSV");
+        menu.getMenu().add(0, 3, 2, "How it works");
+        menu.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1:
+                    startCsvImport();
+                    return true;
+                case 2:
+                    startCsvExport();
+                    return true;
+                case 3:
+                    showHowItWorks();
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        menu.show();
     }
 
     private void addActZone() {
@@ -415,6 +465,7 @@ public final class MainActivity extends Activity {
         fabTarget = new View(this);
         fabTarget.setContentDescription("Add task");
         fabTarget.setOnClickListener(v -> openAddSheet());
+        fabTarget.setOnTouchListener(this::handleFabTouch);
         FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(dp(60), dp(60));
         targetParams.gravity = fabParams.gravity;
         targetParams.bottomMargin = fabParams.bottomMargin;
@@ -442,6 +493,141 @@ public final class MainActivity extends Activity {
             return Gravity.CENTER_HORIZONTAL;
         }
         return Gravity.END;
+    }
+
+    // ---- drag the + button to reposition it (snaps to left / center / right) ----
+
+    private boolean handleFabTouch(View v, MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                fabDownRawX = event.getRawX();
+                fabDownRawY = event.getRawY();
+                fabMoved = false;
+                fabDragging = false;
+                fabLongPressRunnable = this::beginFabDrag;
+                handler.postDelayed(fabLongPressRunnable, 260);
+                return true;
+            case MotionEvent.ACTION_MOVE: {
+                float dx = event.getRawX() - fabDownRawX;
+                float dy = event.getRawY() - fabDownRawY;
+                if (!fabDragging) {
+                    if (Math.abs(dx) > dp(12) || Math.abs(dy) > dp(12)) {
+                        fabMoved = true;
+                        beginFabDrag();
+                    } else {
+                        return true;
+                    }
+                }
+                moveFabBy(dx, dy);
+                return true;
+            }
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL: {
+                if (fabLongPressRunnable != null) {
+                    handler.removeCallbacks(fabLongPressRunnable);
+                    fabLongPressRunnable = null;
+                }
+                boolean wasDragging = fabDragging;
+                fabDragging = false;
+                if (wasDragging) {
+                    endFabDrag();
+                } else if (!fabMoved && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    openAddSheet();
+                }
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    private void beginFabDrag() {
+        if (fabDragging) {
+            return;
+        }
+        fabDragging = true;
+        if (fabLongPressRunnable != null) {
+            handler.removeCallbacks(fabLongPressRunnable);
+            fabLongPressRunnable = null;
+        }
+        if (fab != null) {
+            fab.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            fab.animate().cancel();
+            fab.animate().scaleX(1.14f).scaleY(1.14f).setDuration(120).start();
+            fab.setElevation(dp(16));
+        }
+        if (reachArc != null) {
+            reachArc.animate().alpha(0f).setDuration(120).start();
+        }
+    }
+
+    private void moveFabBy(float dx, float dy) {
+        if (fab != null) {
+            fab.setTranslationX(dx);
+            fab.setTranslationY(dy);
+        }
+        if (fabTarget != null) {
+            fabTarget.setTranslationX(dx);
+            fabTarget.setTranslationY(dy);
+        }
+    }
+
+    private void endFabDrag() {
+        if (fab != null) {
+            fab.animate().cancel();
+            fab.animate().scaleX(1f).scaleY(1f).setDuration(140).start();
+            fab.setElevation(dp(8));
+        }
+        View ref = fab != null ? fab : fabTarget;
+        if (ref == null || root == null) {
+            snapFabBack();
+            return;
+        }
+        int[] loc = new int[2];
+        ref.getLocationOnScreen(loc);
+        float centerX = loc[0] + ref.getWidth() / 2f;
+        int screenW = root.getWidth() > 0 ? root.getWidth()
+                : getResources().getDisplayMetrics().widthPixels;
+        String newHand;
+        if (centerX < screenW / 3f) {
+            newHand = HAND_LEFT;
+        } else if (centerX > screenW * 2f / 3f) {
+            newHand = HAND_RIGHT;
+        } else {
+            newHand = HAND_CENTER;
+        }
+        if (!newHand.equals(hand)) {
+            hand = newHand;
+            persistPrefs();
+            showCheer(handMovedLabel(newHand));
+            rebuildEverything();
+        } else {
+            snapFabBack();
+        }
+    }
+
+    private void snapFabBack() {
+        for (View x : new View[]{fab, fabTarget}) {
+            if (x != null) {
+                x.animate().translationX(0f).translationY(0f)
+                        .setDuration(220)
+                        .setInterpolator(new OvershootInterpolator(1.2f))
+                        .start();
+            }
+        }
+        if (reachArc != null) {
+            reachArc.animate().alpha(1f).setDuration(200).start();
+        }
+    }
+
+    private String handMovedLabel(String value) {
+        if (HAND_LEFT.equals(value)) {
+            return "Moved to the left";
+        }
+        if (HAND_CENTER.equals(value)) {
+            return "Centered";
+        }
+        return "Moved to the right";
     }
 
     // ===================== rendering =====================
@@ -1509,13 +1695,31 @@ public final class MainActivity extends Activity {
         });
         content.addView(sheetInput, matchWrap(0, 0, 0, 0));
 
+        LinearLayout reminderRow = horizontal();
         remindChip = text("", 13, 700, palette.sub);
-        remindChip.setPadding(dp(4), dp(8), dp(4), dp(8));
+        remindChip.setGravity(Gravity.CENTER_VERTICAL);
+        remindChip.setPadding(dp(14), dp(10), dp(14), dp(10));
         remindChip.setOnClickListener(v -> openReminderPicker());
-        content.addView(remindChip, wrap(0, 12, 0, 0));
+        reminderRow.addView(remindChip, wrap(0, 0, 8, 0));
+        remindClear = text("Clear", 12, 700, palette.sub);
+        remindClear.setGravity(Gravity.CENTER);
+        remindClear.setPadding(dp(12), dp(9), dp(12), dp(9));
+        GradientDrawable clearBg = new GradientDrawable();
+        clearBg.setColor(Color.TRANSPARENT);
+        clearBg.setCornerRadius(dp(12));
+        clearBg.setStroke(dp(2), palette.line);
+        remindClear.setBackground(clearBg);
+        remindClear.setOnClickListener(v -> {
+            draftReminderAt = 0;
+            draftRepeatUnit = TodoTask.REPEAT_NONE;
+            draftRepeatEvery = 1;
+            updateSheetDynamic();
+        });
+        reminderRow.addView(remindClear, wrap(0, 0, 0, 0));
+        content.addView(reminderRow, wrap(0, 12, 0, 0));
 
         reminderRepeatRow = horizontal();
-        content.addView(reminderRepeatRow, matchWrap(0, 6, 0, 0));
+        content.addView(reminderRepeatRow, matchWrap(0, 8, 0, 0));
 
         if (!categories.isEmpty()) {
             content.addView(chipGroupLabel("LIST"), matchWrap(0, 14, 0, 8));
@@ -1596,8 +1800,12 @@ public final class MainActivity extends Activity {
         detailsToggle.setText(detailsExpanded ? "Done" : "Adjust");
         styleAdjustButton();
 
-        remindChip.setText(draftReminderAt > 0 ? "⏰ " + reminderShortFromMillis(draftReminderAt) : "⏰ Add reminder");
-        remindChip.setTextColor(draftReminderAt > 0 ? palette.accent : palette.sub);
+        boolean hasReminder = draftReminderAt > 0;
+        remindChip.setText(hasReminder ? "⏰  " + reminderShortFromMillis(draftReminderAt) : "⏰  Add reminder");
+        styleReminderChip(hasReminder);
+        if (remindClear != null) {
+            remindClear.setVisibility(hasReminder ? View.VISIBLE : View.GONE);
+        }
 
         reminderRepeatRow.removeAllViews();
         if (draftReminderAt > 0) {
@@ -1630,19 +1838,76 @@ public final class MainActivity extends Activity {
             return;
         }
         detailsToggle.setTextColor(detailsExpanded ? palette.accent : palette.accentInk);
-        detailsToggle.setPadding(dp(10), dp(5), dp(10), dp(5));
+        detailsToggle.setPadding(dp(14), dp(7), dp(14), dp(7));
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(999));
         if (detailsExpanded) {
             bg.setColor(Color.TRANSPARENT);
             bg.setStroke(dp(2), palette.accent);
             detailsToggle.setShadowLayer(0, 0, 0, Color.TRANSPARENT);
+            detailsToggle.setElevation(0f);
+            stopAdjustPulse();
         } else {
             bg.setColor(palette.accent);
             bg.setStroke(dp(2), PriorityPalette.withAlpha(0xFFFFFFFF, 0x99));
-            detailsToggle.setShadowLayer(dp(3), 0, 0, PriorityPalette.withAlpha(palette.accent, 0xAA));
+            detailsToggle.setShadowLayer(dp(4), 0, 0, PriorityPalette.withAlpha(palette.accent, 0xAA));
+            detailsToggle.setElevation(dp(4));
+            startAdjustPulse();
         }
         detailsToggle.setBackground(bg);
+    }
+
+    private void startAdjustPulse() {
+        if (detailsToggle == null) {
+            return;
+        }
+        if (adjustPulse != null && adjustPulse.isRunning()) {
+            return;
+        }
+        adjustPulse = ValueAnimator.ofFloat(0f, 1f);
+        adjustPulse.setDuration(820);
+        adjustPulse.setRepeatCount(ValueAnimator.INFINITE);
+        adjustPulse.setRepeatMode(ValueAnimator.REVERSE);
+        adjustPulse.addUpdateListener(animation -> {
+            if (detailsToggle == null) {
+                return;
+            }
+            float f = (float) animation.getAnimatedValue();
+            float scale = 1f + 0.07f * f;
+            detailsToggle.setScaleX(scale);
+            detailsToggle.setScaleY(scale);
+        });
+        adjustPulse.start();
+    }
+
+    private void stopAdjustPulse() {
+        if (adjustPulse != null) {
+            adjustPulse.cancel();
+            adjustPulse = null;
+        }
+        if (detailsToggle != null) {
+            detailsToggle.setScaleX(1f);
+            detailsToggle.setScaleY(1f);
+        }
+    }
+
+    private void styleReminderChip(boolean active) {
+        if (remindChip == null) {
+            return;
+        }
+        applyFont(remindChip, 700);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(12));
+        if (active) {
+            bg.setColor(PriorityPalette.withAlpha(palette.accent, 0x1F));
+            bg.setStroke(dp(2), palette.accent);
+            remindChip.setTextColor(palette.accent);
+        } else {
+            bg.setColor(palette.bg);
+            bg.setStroke(dp(2), palette.line);
+            remindChip.setTextColor(palette.sub);
+        }
+        remindChip.setBackground(bg);
     }
 
     private void toggleDetailsAnimated() {
@@ -1901,6 +2166,7 @@ public final class MainActivity extends Activity {
     }
 
     private void closeSheet() {
+        stopAdjustPulse();
         if (sheetOverlay == null) {
             sheetOpen = false;
             return;
@@ -1922,6 +2188,7 @@ public final class MainActivity extends Activity {
     }
 
     private void removeSheetImmediate() {
+        stopAdjustPulse();
         if (sheetOverlay != null) {
             detachSheetKeyboardHandling();
             root.removeView(sheetOverlay);
@@ -2287,6 +2554,10 @@ public final class MainActivity extends Activity {
         void setState(String handState, String themeState) {
             this.handState = handState;
             this.themeState = themeState;
+            if ("more".equals(kind)) {
+                invalidate();
+                return;
+            }
             if ("hand".equals(kind)) {
                 if (HAND_RIGHT.equals(handState)) {
                     setContentDescription("Add button on right");
@@ -2325,9 +2596,24 @@ public final class MainActivity extends Activity {
             canvas.drawOval(oval, paint);
             if ("hand".equals(kind)) {
                 drawHand(canvas);
+            } else if ("more".equals(kind)) {
+                drawMore(canvas);
             } else {
                 drawTheme(canvas);
             }
+        }
+
+        private void drawMore(Canvas canvas) {
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            float unit = getWidth() / 36f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(palette.sub);
+            float r = unit * 1.7f;
+            float gap = unit * 5.4f;
+            canvas.drawCircle(cx, cy - gap, r, paint);
+            canvas.drawCircle(cx, cy, r, paint);
+            canvas.drawCircle(cx, cy + gap, r, paint);
         }
 
         private void drawHand(Canvas canvas) {
@@ -2456,20 +2742,6 @@ public final class MainActivity extends Activity {
     }
 
     // ===================== view factory helpers =====================
-
-    private TextView headerTextButton(String label) {
-        TextView button = text(label, 11, 800, palette.sub);
-        button.setGravity(Gravity.CENTER);
-        button.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(palette.surface);
-        bg.setCornerRadius(dp(999));
-        bg.setStroke(dp(1), palette.line);
-        button.setBackground(bg);
-        button.setMinHeight(dp(36));
-        button.setContentDescription(label + " CSV");
-        return button;
-    }
 
     private TextView pill(String label) {
         TextView pill = new TextView(this);
