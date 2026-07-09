@@ -37,6 +37,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
@@ -2236,10 +2237,15 @@ public final class MainActivity extends Activity {
         if (sheetOverlay == null) {
             return;
         }
-        sheetKeyboardLayoutListener = () -> updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
+        sheetOverlay.setOnApplyWindowInsetsListener((view, insets) -> {
+            updateSheetForKeyboardInset(visibleKeyboardInset(view, insets));
+            return insets;
+        });
+        sheetKeyboardLayoutListener = () -> updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay, null));
         sheetOverlay.getViewTreeObserver().addOnGlobalLayoutListener(sheetKeyboardLayoutListener);
+        sheetOverlay.requestApplyInsets();
         sheetOverlay.post(() -> {
-            updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
+            updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay, null));
         });
     }
 
@@ -2249,12 +2255,22 @@ public final class MainActivity extends Activity {
             return;
         }
         sheetOverlay.getViewTreeObserver().removeOnGlobalLayoutListener(sheetKeyboardLayoutListener);
+        sheetOverlay.setOnApplyWindowInsetsListener(null);
         sheetKeyboardLayoutListener = null;
     }
 
-    private int visibleKeyboardInset(View view) {
+    private int visibleKeyboardInset(View view, WindowInsets appliedInsets) {
         if (view == null) {
             return 0;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsets insets = appliedInsets != null ? appliedInsets : view.getRootWindowInsets();
+            if (insets != null) {
+                int imeInset = insets.getInsets(WindowInsets.Type.ime()).bottom;
+                if (imeInset >= dp(120)) {
+                    return imeInset;
+                }
+            }
         }
         Rect visibleFrame = new Rect();
         view.getWindowVisibleDisplayFrame(visibleFrame);

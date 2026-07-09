@@ -31,7 +31,44 @@ adb exec-out screencap -p > "$SCREENSHOT_DIR/01-launch-home.png"
 adb shell uiautomator dump /sdcard/window-launch.xml
 adb pull /sdcard/window-launch.xml "$SCREENSHOT_DIR/window-launch.xml"
 
+set +e
 python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+def text_of(node):
+    return node.attrib.get("text", "") or node.attrib.get("content-desc", "")
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
+got_it = next((node for node in root.iter("node") if text_of(node).upper() == "GOT IT"), None)
+if got_it is not None:
+    x, y = center(got_it.attrib["bounds"])
+    with open(f"{SCREENSHOT_DIR}/onboarding-got-it-center.txt", "w") as f:
+        f.write(f"{x} {y}\n")
+    raise SystemExit(2)
+add = next(node for node in root.iter("node") if text_of(node) in {"+ Add", "Add task"})
+x, y = center(add.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/add-affordance-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+launch_lookup_status="$?"
+set -e
+case "$launch_lookup_status" in
+  0) ;;
+  2)
+    read got_it_x got_it_y < "$SCREENSHOT_DIR/onboarding-got-it-center.txt"
+    adb shell input tap "$got_it_x" "$got_it_y"
+    sleep 1
+    adb exec-out screencap -p > "$SCREENSHOT_DIR/01b-launch-home-after-onboarding.png"
+    adb shell uiautomator dump /sdcard/window-launch.xml
+    adb pull /sdcard/window-launch.xml "$SCREENSHOT_DIR/window-launch.xml"
+    python3 - <<'PY'
 import re
 import xml.etree.ElementTree as ET
 
@@ -50,6 +87,9 @@ x, y = center(add.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/add-affordance-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
+    ;;
+  *) exit 1 ;;
+esac
 
 read add_x add_y < "$SCREENSHOT_DIR/add-affordance-center.txt"
 adb shell input tap "$add_x" "$add_y"
