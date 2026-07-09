@@ -33,7 +33,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
-import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
@@ -1783,19 +1782,10 @@ public final class MainActivity extends Activity {
         if (sheetOverlay == null) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            sheetOverlay.setOnApplyWindowInsetsListener((view, insets) -> {
-                updateSheetForKeyboardInset(insets.getInsets(WindowInsets.Type.ime()).bottom);
-                return insets;
-            });
-        }
         sheetKeyboardLayoutListener = () -> updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
         sheetOverlay.getViewTreeObserver().addOnGlobalLayoutListener(sheetKeyboardLayoutListener);
         sheetOverlay.post(() -> {
             updateSheetForKeyboardInset(visibleKeyboardInset(sheetOverlay));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
-                sheetOverlay.requestApplyInsets();
-            }
         });
     }
 
@@ -1806,9 +1796,6 @@ public final class MainActivity extends Activity {
         }
         sheetOverlay.getViewTreeObserver().removeOnGlobalLayoutListener(sheetKeyboardLayoutListener);
         sheetKeyboardLayoutListener = null;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            sheetOverlay.setOnApplyWindowInsetsListener(null);
-        }
     }
 
     private int visibleKeyboardInset(View view) {
@@ -1817,7 +1804,9 @@ public final class MainActivity extends Activity {
         }
         Rect visibleFrame = new Rect();
         view.getWindowVisibleDisplayFrame(visibleFrame);
-        int inset = Math.max(0, view.getRootView().getHeight() - visibleFrame.bottom);
+        int screenHeight = Math.max(view.getRootView().getHeight(),
+                getResources().getDisplayMetrics().heightPixels);
+        int inset = Math.max(0, screenHeight - visibleFrame.bottom);
         return inset >= dp(120) ? inset : 0;
     }
 
