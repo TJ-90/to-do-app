@@ -8,6 +8,7 @@ import android.app.DatePickerDialog;
 import android.app.NotificationManager;
 import android.app.TimePickerDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -20,6 +21,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -57,18 +59,29 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
     private static final String UI_PREFS = "priority_todo_ui";
     private static final String LEGACY_NIGHT_MODE = "night_mode";
     private static final String KEY_THEME = "theme";
     private static final String KEY_HAND = "hand";
+    private static final String KEY_ONBOARDED = "onboarded_v2";
 
     private static final String THEME_DAY = "day";
     private static final String THEME_NIGHT = "night";
     private static final String THEME_SYSTEM = "system";
     private static final String HAND_RIGHT = "right";
+    private static final String HAND_CENTER = "center";
     private static final String HAND_LEFT = "left";
+    private static final int REQUEST_EXPORT_CSV = 21;
+    private static final int REQUEST_IMPORT_CSV = 22;
 
     private static final String[] DEPENDENCIES = {"None", "Sequential", "Reciprocal", "Pooled"};
     private static final String[] REPEAT_UNITS = {"No repeat", "Day", "Week", "Month"};
@@ -161,6 +174,21 @@ public final class MainActivity extends Activity {
         rescheduleFutureReminders();
         buildChrome();
         renderAll(false);
+        maybeShowOnboarding();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        Uri uri = data.getData();
+        if (requestCode == REQUEST_EXPORT_CSV) {
+            exportCsvTo(uri);
+        } else if (requestCode == REQUEST_IMPORT_CSV) {
+            importCsvFrom(uri);
+        }
     }
 
     // ===================== prefs / theme =====================
@@ -182,6 +210,31 @@ public final class MainActivity extends Activity {
                 .putString(KEY_THEME, theme)
                 .putString(KEY_HAND, hand)
                 .apply();
+    }
+
+    private void markOnboarded() {
+        getSharedPreferences(UI_PREFS, MODE_PRIVATE).edit()
+                .putBoolean(KEY_ONBOARDED, true)
+                .apply();
+    }
+
+    private void maybeShowOnboarding() {
+        SharedPreferences prefs = getSharedPreferences(UI_PREFS, MODE_PRIVATE);
+        if (prefs.getBoolean(KEY_ONBOARDED, false)) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Welcome to Clearflow")
+                .setMessage("Add one task, then use Adjust when the default guess is wrong.\n\n"
+                        + "Quick win means low-effort work you can finish fast.\n"
+                        + "Urgent means it jumps to the top because it needs attention now.\n\n"
+                        + "Move the + button with the hand button. Use Import and Export for CSV backups or moving tasks between installs.")
+                .setPositiveButton("Start", (dialog, which) -> markOnboarded())
+                .setNegativeButton("Import CSV", (dialog, which) -> {
+                    markOnboarded();
+                    startCsvImport();
+                })
+                .show();
     }
 
     private boolean isNightEffective() {
@@ -210,7 +263,13 @@ public final class MainActivity extends Activity {
     }
 
     private void toggleHand() {
-        hand = HAND_RIGHT.equals(hand) ? HAND_LEFT : HAND_RIGHT;
+        if (HAND_RIGHT.equals(hand)) {
+            hand = HAND_CENTER;
+        } else if (HAND_CENTER.equals(hand)) {
+            hand = HAND_LEFT;
+        } else {
+            hand = HAND_RIGHT;
+        }
         persistPrefs();
         rebuildEverything();
     }
@@ -296,10 +355,16 @@ public final class MainActivity extends Activity {
         header.addView(titleCol, weight(1, 0, 0, 0, 0));
 
         LinearLayout toggles = horizontal();
+        TextView importCsv = headerTextButton("Import");
+        importCsv.setOnClickListener(v -> startCsvImport());
+        TextView exportCsv = headerTextButton("Export");
+        exportCsv.setOnClickListener(v -> startCsvExport());
         handPill = new HeaderIconButton(this, "hand");
         handPill.setOnClickListener(v -> toggleHand());
         themePill = new HeaderIconButton(this, "theme");
         themePill.setOnClickListener(v -> cycleTheme());
+        toggles.addView(importCsv, wrap(0, 0, 6, 0));
+        toggles.addView(exportCsv, wrap(0, 0, 6, 0));
         toggles.addView(handPill, wrap(0, 0, 6, 0));
         toggles.addView(themePill, wrap(0, 0, 0, 0));
         header.addView(toggles, wrap(0, 0, 0, 0));
@@ -314,11 +379,11 @@ public final class MainActivity extends Activity {
         arc.setStroke(dp(2), PriorityPalette.withAlpha(palette.accent, 0x52), dp(8), dp(8));
         reachArc.setBackground(arc);
         FrameLayout.LayoutParams arcParams = new FrameLayout.LayoutParams(dp(280), dp(280));
-        arcParams.gravity = Gravity.BOTTOM | (HAND_RIGHT.equals(hand) ? Gravity.END : Gravity.START);
+        arcParams.gravity = Gravity.BOTTOM | horizontalGravityForAddButton();
         arcParams.bottomMargin = dp(-118);
         if (HAND_RIGHT.equals(hand)) {
             arcParams.rightMargin = dp(-118);
-        } else {
+        } else if (HAND_LEFT.equals(hand)) {
             arcParams.leftMargin = dp(-118);
         }
         root.addView(reachArc, arcParams);
@@ -338,11 +403,11 @@ public final class MainActivity extends Activity {
         fab.setElevation(dp(8));
         fab.setOnClickListener(v -> openAddSheet());
         FrameLayout.LayoutParams fabParams = new FrameLayout.LayoutParams(dp(60), dp(60));
-        fabParams.gravity = Gravity.BOTTOM | (HAND_RIGHT.equals(hand) ? Gravity.END : Gravity.START);
+        fabParams.gravity = Gravity.BOTTOM | horizontalGravityForAddButton();
         fabParams.bottomMargin = dp(24);
         if (HAND_RIGHT.equals(hand)) {
             fabParams.rightMargin = dp(20);
-        } else {
+        } else if (HAND_LEFT.equals(hand)) {
             fabParams.leftMargin = dp(20);
         }
         root.addView(fab, fabParams);
@@ -367,6 +432,16 @@ public final class MainActivity extends Activity {
         hbParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         hbParams.bottomMargin = dp(8);
         root.addView(homeBar, hbParams);
+    }
+
+    private int horizontalGravityForAddButton() {
+        if (HAND_LEFT.equals(hand)) {
+            return Gravity.START;
+        }
+        if (HAND_CENTER.equals(hand)) {
+            return Gravity.CENTER_HORIZONTAL;
+        }
+        return Gravity.END;
     }
 
     // ===================== rendering =====================
@@ -1114,6 +1189,111 @@ public final class MainActivity extends Activity {
         renderAll(false);
     }
 
+    // ===================== csv backup =====================
+
+    private void startCsvExport() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/csv");
+        intent.putExtra(Intent.EXTRA_TITLE, "clearflow-tasks.csv");
+        startActivityForResult(intent, REQUEST_EXPORT_CSV);
+    }
+
+    private void startCsvImport() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/*");
+        startActivityForResult(intent, REQUEST_IMPORT_CSV);
+    }
+
+    private void exportCsvTo(Uri uri) {
+        try (OutputStream stream = getContentResolver().openOutputStream(uri);
+             OutputStreamWriter writer = new OutputStreamWriter(stream, StandardCharsets.UTF_8)) {
+            writer.write(CsvCodec.exportTasks(tasks));
+            showCheer("CSV exported");
+        } catch (IOException | NullPointerException ex) {
+            showDataError("Export failed", "Clearflow couldn't write the CSV file.");
+        }
+    }
+
+    private void importCsvFrom(Uri uri) {
+        try (InputStream stream = getContentResolver().openInputStream(uri);
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            StringBuilder csv = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                csv.append(line).append('\n');
+            }
+            int changed = mergeImportedTasks(CsvCodec.importTasks(csv.toString()));
+            store.save(tasks);
+            store.saveCategories(categories);
+            rescheduleFutureReminders();
+            renderAll(false);
+            showCheer(changed + " tasks imported");
+        } catch (IOException | NullPointerException ex) {
+            showDataError("Import failed", "Clearflow couldn't read that CSV file.");
+        }
+    }
+
+    private int mergeImportedTasks(List<TodoTask> incoming) {
+        Map<String, TodoTask> byId = new HashMap<>();
+        for (TodoTask task : tasks) {
+            byId.put(task.id, task);
+        }
+        int changed = 0;
+        for (TodoTask imported : incoming) {
+            TodoTask existing = byId.get(imported.id);
+            if (existing == null) {
+                tasks.add(imported);
+                byId.put(imported.id, imported);
+            } else {
+                copyTask(imported, existing);
+            }
+            if (imported.category != null && !hasCategory(imported.category)) {
+                categories.add(imported.category);
+            }
+            changed++;
+        }
+        return changed;
+    }
+
+    private boolean hasCategory(String name) {
+        for (String category : categories) {
+            if (category.equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void copyTask(TodoTask from, TodoTask to) {
+        ReminderScheduler.cancel(this, to);
+        to.title = from.title;
+        to.notes = from.notes;
+        to.impact = from.impact;
+        to.effort = from.effort;
+        to.dependency = from.dependency;
+        to.category = from.category;
+        to.urgent = from.urgent;
+        to.quickTask = from.quickTask;
+        to.snoozed = from.snoozed;
+        to.recurringMit = from.recurringMit;
+        to.completed = from.completed;
+        to.createdAt = from.createdAt;
+        to.reminderAt = from.reminderAt;
+        to.reminderRepeatUnit = from.reminderRepeatUnit;
+        to.reminderRepeatEvery = from.reminderRepeatEvery;
+    }
+
+    private void showDataError(String title, String message) {
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
     private void buildListChips() {
         if (listChipsRow == null) {
             return;
@@ -1344,13 +1524,15 @@ public final class MainActivity extends Activity {
             content.addView(listChipsRow, matchWrap(0, 0, 0, 0));
         }
 
-        detailsToggle = text("", 12, 800, palette.accent);
+        detailsToggle = text("", 12, 800, palette.accentInk);
         LinearLayout toggleRow = horizontal();
         GradientDrawable toggleBg = new GradientDrawable();
         toggleBg.setColor(palette.bg);
         toggleBg.setCornerRadius(dp(12));
+        toggleBg.setStroke(dp(2), PriorityPalette.withAlpha(palette.accent, 0x77));
         toggleRow.setBackground(toggleBg);
         toggleRow.setPadding(dp(14), dp(11), dp(14), dp(11));
+        toggleRow.setElevation(dp(3));
         toggleRow.setOnClickListener(v -> toggleDetailsAnimated());
         detailsSummary = text("", 12, 600, palette.sub);
         toggleRow.addView(detailsSummary, weight(1, 0, 0, 12, 0));
@@ -1405,13 +1587,14 @@ public final class MainActivity extends Activity {
             parts.add(draftDep);
         }
         if (draftQuick) {
-            parts.add("Quick win");
+            parts.add("Quick win: fast");
         }
         if (draftUrgent) {
-            parts.add("Urgent");
+            parts.add("Urgent: top");
         }
         detailsSummary.setText("Assumed: " + TextUtils.join("  ·  ", parts));
         detailsToggle.setText(detailsExpanded ? "Done" : "Adjust");
+        styleAdjustButton();
 
         remindChip.setText(draftReminderAt > 0 ? "⏰ " + reminderShortFromMillis(draftReminderAt) : "⏰ Add reminder");
         remindChip.setTextColor(draftReminderAt > 0 ? palette.accent : palette.sub);
@@ -1440,6 +1623,26 @@ public final class MainActivity extends Activity {
         commitButton.setText("edit".equals(sheetMode) ? "Save" : "Add task");
         commitButton.setAlpha(ready ? 1f : 0.4f);
         commitButton.setEnabled(ready);
+    }
+
+    private void styleAdjustButton() {
+        if (detailsToggle == null) {
+            return;
+        }
+        detailsToggle.setTextColor(detailsExpanded ? palette.accent : palette.accentInk);
+        detailsToggle.setPadding(dp(10), dp(5), dp(10), dp(5));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(999));
+        if (detailsExpanded) {
+            bg.setColor(Color.TRANSPARENT);
+            bg.setStroke(dp(2), palette.accent);
+            detailsToggle.setShadowLayer(0, 0, 0, Color.TRANSPARENT);
+        } else {
+            bg.setColor(palette.accent);
+            bg.setStroke(dp(2), PriorityPalette.withAlpha(0xFFFFFFFF, 0x99));
+            detailsToggle.setShadowLayer(dp(3), 0, 0, PriorityPalette.withAlpha(palette.accent, 0xAA));
+        }
+        detailsToggle.setBackground(bg);
     }
 
     private void toggleDetailsAnimated() {
@@ -1522,12 +1725,12 @@ public final class MainActivity extends Activity {
         container.addView(depRow(), matchWrap(0, 8, 0, 15));
 
         LinearLayout flags = horizontal();
-        TextView urgent = chipButton("Urgent", draftUrgent, PriorityPalette.SOMEDAY, 0xFFFFFFFF);
+        TextView urgent = chipButton("Urgent: do now", draftUrgent, PriorityPalette.IMMEDIATE, 0xFFFFFFFF);
         urgent.setOnClickListener(v -> {
             draftUrgent = !draftUrgent;
             updateSheetDynamic();
         });
-        TextView quick = chipButton("Quick win", draftQuick, palette.accent, palette.accentInk);
+        TextView quick = chipButton("Quick win: low effort", draftQuick, palette.accent, palette.accentInk);
         quick.setOnClickListener(v -> {
             draftQuick = !draftQuick;
             updateSheetDynamic();
@@ -2085,7 +2288,13 @@ public final class MainActivity extends Activity {
             this.handState = handState;
             this.themeState = themeState;
             if ("hand".equals(kind)) {
-                setContentDescription(HAND_RIGHT.equals(handState) ? "Right hand" : "Left hand");
+                if (HAND_RIGHT.equals(handState)) {
+                    setContentDescription("Add button on right");
+                } else if (HAND_CENTER.equals(handState)) {
+                    setContentDescription("Add button centered");
+                } else {
+                    setContentDescription("Add button on left");
+                }
             } else if (THEME_DAY.equals(themeState)) {
                 setContentDescription("Day theme");
             } else if (THEME_NIGHT.equals(themeState)) {
@@ -2127,6 +2336,8 @@ public final class MainActivity extends Activity {
             canvas.save();
             if (HAND_LEFT.equals(handState)) {
                 canvas.scale(-1f, 1f, center, center);
+            } else if (HAND_CENTER.equals(handState)) {
+                canvas.translate(-2f * scale, 0f);
             }
             canvas.translate(6f * scale, 6f * scale);
             canvas.scale(scale, scale);
@@ -2245,6 +2456,20 @@ public final class MainActivity extends Activity {
     }
 
     // ===================== view factory helpers =====================
+
+    private TextView headerTextButton(String label) {
+        TextView button = text(label, 11, 800, palette.sub);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(10), dp(8), dp(10), dp(8));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.surface);
+        bg.setCornerRadius(dp(999));
+        bg.setStroke(dp(1), palette.line);
+        button.setBackground(bg);
+        button.setMinHeight(dp(36));
+        button.setContentDescription(label + " CSV");
+        return button;
+    }
 
     private TextView pill(String label) {
         TextView pill = new TextView(this);

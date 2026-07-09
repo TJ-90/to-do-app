@@ -7,6 +7,9 @@ import static org.junit.Assert.assertTrue;
 import org.json.JSONObject;
 import org.junit.Test;
 
+import java.util.Arrays;
+import java.util.List;
+
 public final class TodoTaskTest {
     @Test
     public void toJsonStoresNullCategoryAsJsonNull() throws Exception {
@@ -76,5 +79,62 @@ public final class TodoTaskTest {
 
         assertEquals(0, frame.bottomMarginPx);
         assertEquals(1268, frame.maxHeightPx);
+    }
+
+    @Test
+    public void csvRoundTripPreservesEditableTaskFields() {
+        TodoTask task = new TodoTask();
+        task.id = "task-1";
+        task.title = "Call, email \"Sam\"";
+        task.notes = "Follow up on price";
+        task.completed = true;
+        task.impact = TodoTask.MEDIUM;
+        task.effort = TodoTask.LOW;
+        task.urgent = true;
+        task.quickTask = true;
+        task.category = "Work";
+        task.dependency = "Sequential";
+        task.reminderAt = 123456L;
+        task.reminderRepeatUnit = TodoTask.REPEAT_WEEK;
+        task.reminderRepeatEvery = 2;
+        task.createdAt = 99L;
+
+        List<TodoTask> restored = CsvCodec.importTasks(CsvCodec.exportTasks(Arrays.asList(task)));
+
+        assertEquals(1, restored.size());
+        TodoTask copy = restored.get(0);
+        assertEquals("task-1", copy.id);
+        assertEquals("Call, email \"Sam\"", copy.title);
+        assertEquals("Follow up on price", copy.notes);
+        assertTrue(copy.completed);
+        assertEquals(TodoTask.MEDIUM, copy.impact);
+        assertEquals(TodoTask.LOW, copy.effort);
+        assertTrue(copy.urgent);
+        assertTrue(copy.quickTask);
+        assertEquals("Work", copy.category);
+        assertEquals("Sequential", copy.dependency);
+        assertEquals(123456L, copy.reminderAt);
+        assertEquals(TodoTask.REPEAT_WEEK, copy.reminderRepeatUnit);
+        assertEquals(2, copy.reminderRepeatEvery);
+        assertEquals(99L, copy.createdAt);
+    }
+
+    @Test
+    public void csvImportSkipsBlankTitlesAndAcceptsHumanLevelNames() {
+        String csv = "ID,Title,Impact,Effort,Urgent,QuickTask,RepeatUnit\n"
+                + "skip,,High,Low,false,false\n"
+                + "keep,Ship fix,High,Low,yes,1,Week\n";
+
+        List<TodoTask> restored = CsvCodec.importTasks(csv);
+
+        assertEquals(1, restored.size());
+        TodoTask task = restored.get(0);
+        assertEquals("keep", task.id);
+        assertEquals("Ship fix", task.title);
+        assertEquals(TodoTask.HIGH, task.impact);
+        assertEquals(TodoTask.LOW, task.effort);
+        assertTrue(task.urgent);
+        assertTrue(task.quickTask);
+        assertEquals(TodoTask.REPEAT_WEEK, task.reminderRepeatUnit);
     }
 }
