@@ -646,7 +646,7 @@ public final class MainActivity extends Activity {
         int pct = total == 0 ? 0 : Math.round((done / (float) total) * 100f);
 
         TodoTask mit = active.isEmpty() ? null : active.get(0);
-        String mitCat = mit == null ? PriorityPalette.IMMEDIATE_LABEL : PriorityPalette.bucket(mit.score());
+        int heroAccent = PriorityPalette.spectrumColor(0, active.size(), isNightEffective());
 
         headerSubView.setText(remaining + " to go  ·  " + done + " done");
         if (handPill != null) {
@@ -657,18 +657,18 @@ public final class MainActivity extends Activity {
         }
         renderCategoryStrip();
 
-        renderHero(mit, mitCat, pct, done, total);
+        renderHero(mit, heroAccent, pct, done, total);
         renderList(active, animateReorder);
     }
 
-    private void renderHero(TodoTask mit, String mitCat, int pct, int done, int total) {
+    private void renderHero(TodoTask mit, int accent, int pct, int done, int total) {
         heroContainer.removeAllViews();
         LinearLayout card = vertical();
         card.setPadding(dp(17), dp(16), dp(17), dp(16));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(palette.surface);
         bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(2), PriorityPalette.catOutline(mitCat));
+        bg.setStroke(dp(2), PriorityPalette.withAlpha(accent, 0xB3));
         card.setBackground(bg);
 
         LinearLayout progressRow = horizontal();
@@ -679,7 +679,7 @@ public final class MainActivity extends Activity {
         track.setBackground(trackBg);
         progressFill = new View(this);
         GradientDrawable fillBg = new GradientDrawable();
-        fillBg.setColor(PriorityPalette.catColor(mitCat));
+        fillBg.setColor(accent);
         fillBg.setCornerRadius(dp(3));
         progressFill.setBackground(fillBg);
         track.addView(progressFill, new FrameLayout.LayoutParams(0, dp(5)));
@@ -718,13 +718,9 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout heroFg = vertical();
-        LinearLayout pillRow = horizontal();
-        TextView catPill = categoryPill(mitCat);
-        TextView kicker = text("YOUR #1 RIGHT NOW", 11, 700, palette.heroSub);
+        TextView kicker = text("YOUR #1 RIGHT NOW", 11, 800, accent);
         kicker.setLetterSpacing(0.1f);
-        pillRow.addView(catPill, wrap(0, 0, 8, 0));
-        pillRow.addView(kicker, wrap(0, 0, 0, 0));
-        heroFg.addView(pillRow, matchWrap(0, 0, 0, 9));
+        heroFg.addView(kicker, matchWrap(0, 0, 0, 9));
 
         TextView mitName = text(mit.title, 23, 800, palette.heroInk);
         mitName.setSingleLine(false);
@@ -733,8 +729,8 @@ public final class MainActivity extends Activity {
         heroFg.addView(mitName);
 
         if (mit.reminderAt > 0) {
-            TextView remind = chipText(reminderShort(mit), PriorityPalette.catColor(mitCat),
-                    PriorityPalette.catSoft(mitCat));
+            TextView remind = chipText(reminderShort(mit), accent,
+                    PriorityPalette.withAlpha(accent, 0x26));
             heroFg.addView(remind, matchWrap(0, 11, 0, 0));
         }
         heroWrap.addView(heroFg, new FrameLayout.LayoutParams(
@@ -764,8 +760,9 @@ public final class MainActivity extends Activity {
             listContainer.addView(empty, matchWrap(0, 24, 0, 0));
             return;
         }
-        for (TodoTask task : active) {
-            listContainer.addView(buildRow(task), matchWrap(0, 0, 0, 0));
+        int rankTotal = active.size();
+        for (int i = 0; i < rankTotal; i++) {
+            listContainer.addView(buildRow(active.get(i), i, rankTotal), matchWrap(0, 0, 0, 0));
         }
 
         if (animateReorder && !rowTops.isEmpty()) {
@@ -791,9 +788,8 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private FrameLayout buildRow(TodoTask task) {
-        String cat = PriorityPalette.bucket(task.score());
-        int tier = PriorityPalette.catColor(cat);
+    private FrameLayout buildRow(TodoTask task, int rank, int total) {
+        int tier = PriorityPalette.spectrumColor(rank, total, isNightEffective());
 
         FrameLayout wrap = new FrameLayout(this);
         wrap.setTag(task.id);
@@ -821,7 +817,7 @@ public final class MainActivity extends Activity {
         circle.setContentDescription("Complete task");
         GradientDrawable circleBg = new GradientDrawable();
         circleBg.setShape(GradientDrawable.OVAL);
-        circleBg.setColor(PriorityPalette.catSoft(cat));
+        circleBg.setColor(PriorityPalette.withAlpha(tier, 0x26));
         circleBg.setStroke(dp(2), tier);
         circle.setBackground(circleBg);
         circle.setClickable(true);
@@ -846,15 +842,12 @@ public final class MainActivity extends Activity {
         name.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(name);
 
-        LinearLayout metaRow = horizontal();
-        TextView catLabel = text(cat.toUpperCase(), 10, 800, tier);
-        catLabel.setLetterSpacing(0.07f);
-        metaRow.addView(catLabel, wrap(0, 0, 8, 0));
         if (task.reminderAt > 0) {
+            LinearLayout metaRow = horizontal();
             TextView meta = text("⏰ " + reminderShort(task), 11, 600, palette.sub);
             metaRow.addView(meta, wrap(0, 0, 0, 0));
+            copy.addView(metaRow, matchWrap(0, 4, 0, 0));
         }
-        copy.addView(metaRow, matchWrap(0, 4, 0, 0));
         fg.addView(copy, weight(1, 0, 0, 0, 0));
 
         wrap.addView(fg, new FrameLayout.LayoutParams(
@@ -1653,14 +1646,8 @@ public final class MainActivity extends Activity {
         gripParams.bottomMargin = dp(14);
         content.addView(grip, gripParams);
 
-        LinearLayout titleRow = horizontal();
         TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 17, 800, palette.ink);
-        titleRow.addView(title, weight(1, 0, 0, 0, 0));
-        TextView landsLabel = text("Lands in", 11, 700, palette.sub);
-        titleRow.addView(landsLabel, wrap(0, 0, 7, 0));
-        landsPill = categoryPill(predictBucket());
-        titleRow.addView(landsPill, wrap(0, 0, 0, 0));
-        content.addView(titleRow, matchWrap(0, 0, 0, 13));
+        content.addView(title, matchWrap(0, 0, 0, 13));
 
         sheetInput = new EditText(this);
         sheetInput.setHint("What needs doing?");
@@ -1781,9 +1768,6 @@ public final class MainActivity extends Activity {
     }
 
     private void updateSheetDynamic() {
-        String bucket = predictBucket();
-        styleCategoryPill(landsPill, bucket);
-
         List<String> parts = new ArrayList<>();
         parts.add(impactLabel(draftImpact) + " impact");
         parts.add(impactLabel(draftEffort) + " effort");

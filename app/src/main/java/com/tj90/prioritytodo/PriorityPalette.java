@@ -1,5 +1,7 @@
 package com.tj90.prioritytodo;
 
+import android.graphics.Color;
+
 final class PriorityPalette {
     static final int IMMEDIATE = 0xFFE82729;
     static final int NEXT_WEEK = 0xFFDFA700;
@@ -74,6 +76,28 @@ final class PriorityPalette {
 
     static int withAlpha(int color, int alpha) {
         return (alpha << 24) | (color & 0x00FFFFFF);
+    }
+
+    /**
+     * VIBGYOR priority spectrum keyed to a task's position in the sorted list.
+     * rank 0 (the top / most important task) is red; the last task is violet.
+     * This is deliberately rank-based, not score-based: raw scores clump at
+     * 10-90 with urgent tasks at 1000+, so an absolute mapping would collapse
+     * the spectrum. Ranking spreads the full spectrum across whatever tasks
+     * exist. Urgent tasks sort to the top on their own, so they land in red.
+     */
+    static int spectrumColor(int rank, int total, boolean night) {
+        float f = total <= 1 ? 0f : (float) rank / (float) (total - 1);
+        if (f < 0f) {
+            f = 0f;
+        }
+        if (f > 1f) {
+            f = 1f;
+        }
+        float hue = f * 280f; // 0 = red (top), 280 = violet (bottom)
+        float sat = night ? 0.60f : 0.75f;
+        float val = night ? 0.98f : 0.82f;
+        return Color.HSVToColor(new float[]{hue, sat, val});
     }
 
     static int catSoft(String bucket) {
