@@ -1240,7 +1240,10 @@ public final class MainActivity extends Activity {
         buildSheetContent(content);
         sheetScroll.addView(content, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        sheetPanel.addView(sheetScroll, matchWrap(0, 0, 0, 0));
+        sheetPanel.addView(sheetScroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        sheetPanel.addView(buildSheetActions(), matchWrap(0, 12, 0, 0));
+        updateSheetDynamic();
 
         sheetOverlay.addView(sheetPanel, panelParams);
         root.addView(sheetOverlay, overlayParams);
@@ -1358,6 +1361,16 @@ public final class MainActivity extends Activity {
         chipsContainer = vertical();
         content.addView(chipsContainer, matchWrap(0, 12, 0, 0));
 
+        if ("edit".equals(sheetMode)) {
+            TextView del = text("Delete task", 13, 700, PriorityPalette.IMMEDIATE);
+            del.setGravity(Gravity.CENTER);
+            del.setPadding(dp(10), dp(12), dp(10), dp(4));
+            del.setOnClickListener(v -> confirmDelete(sheetEditId));
+            content.addView(del, matchWrap(0, 6, 0, 0));
+        }
+    }
+
+    private LinearLayout buildSheetActions() {
         LinearLayout actions = horizontal();
         commitButton = text("", 15, 800, palette.accentInk);
         commitButton.setGravity(Gravity.CENTER);
@@ -1379,17 +1392,7 @@ public final class MainActivity extends Activity {
         cancel.setBackground(cancelBg);
         cancel.setOnClickListener(v -> closeSheet());
         actions.addView(cancel, wrap(0, 0, 0, 0));
-        content.addView(actions, matchWrap(0, 18, 0, 0));
-
-        if ("edit".equals(sheetMode)) {
-            TextView del = text("Delete task", 13, 700, PriorityPalette.IMMEDIATE);
-            del.setGravity(Gravity.CENTER);
-            del.setPadding(dp(10), dp(12), dp(10), dp(4));
-            del.setOnClickListener(v -> confirmDelete(sheetEditId));
-            content.addView(del, matchWrap(0, 6, 0, 0));
-        }
-
-        updateSheetDynamic();
+        return actions;
     }
 
     private void updateSheetDynamic() {
