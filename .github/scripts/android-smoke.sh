@@ -54,6 +54,10 @@ PY
 read add_x add_y < "$SCREENSHOT_DIR/add-affordance-center.txt"
 adb shell input tap "$add_x" "$add_y"
 sleep 2
+if adb shell dumpsys input_method | grep -q "mInputShown=true"; then
+  adb shell input keyevent KEYCODE_BACK || true
+  sleep 1
+fi
 adb exec-out screencap -p > "$SCREENSHOT_DIR/02-add-panel.png"
 adb shell uiautomator dump /sdcard/window-add-panel.xml
 adb pull /sdcard/window-add-panel.xml "$SCREENSHOT_DIR/window-add-panel.xml"

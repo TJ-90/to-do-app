@@ -94,6 +94,7 @@ jobs:
             sh .github/scripts/android-smoke.sh
 
       - name: Upload smoke screenshots and UI dumps
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: priority-todo-smoke-screenshots
