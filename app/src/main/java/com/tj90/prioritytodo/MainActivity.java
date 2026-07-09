@@ -392,8 +392,8 @@ public final class MainActivity extends Activity {
         HeaderIconButton more = new HeaderIconButton(this, "more");
         more.setContentDescription("More options");
         more.setOnClickListener(this::showOverflowMenu);
-        toggles.addView(themePill, wrap(0, 0, 8, 0));
-        toggles.addView(handPill, wrap(0, 0, 8, 0));
+        toggles.addView(themePill, wrap(0, 0, 12, 0));
+        toggles.addView(handPill, wrap(0, 0, 12, 0));
         toggles.addView(more, wrap(0, 0, 0, 0));
         header.addView(toggles, wrap(0, 0, 0, 0));
         return header;
@@ -2585,15 +2585,8 @@ public final class MainActivity extends Activity {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            float stroke = dp(1);
-            oval.set(stroke, stroke, getWidth() - stroke, getHeight() - stroke);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(palette.surface);
-            canvas.drawOval(oval, paint);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(stroke);
-            paint.setColor(palette.line);
-            canvas.drawOval(oval, paint);
+            // Borderless "quiet line icons" treatment (Today.dc.html, option 1a):
+            // no ring/background behind each icon — the glyphs sit bare in the header.
             if ("hand".equals(kind)) {
                 drawHand(canvas);
             } else if ("more".equals(kind)) {
@@ -2608,7 +2601,7 @@ public final class MainActivity extends Activity {
             float cy = getHeight() / 2f;
             float unit = getWidth() / 36f;
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(palette.sub);
+            paint.setColor(palette.accent);
             float r = unit * 1.7f;
             float gap = unit * 5.4f;
             canvas.drawCircle(cx, cy - gap, r, paint);
@@ -2631,7 +2624,7 @@ public final class MainActivity extends Activity {
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
             paint.setStrokeWidth(1.55f);
-            paint.setColor(palette.sub);
+            paint.setColor(palette.accent);
             canvas.drawLine(6f, 15f, 6f, 8f, paint);
             canvas.drawLine(10f, 14f, 10f, 5f, paint);
             canvas.drawLine(14f, 14f, 14f, 4.5f, paint);
@@ -2664,7 +2657,7 @@ public final class MainActivity extends Activity {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeWidth(getWidth() / 36f * 1.55f);
-            paint.setColor(palette.sub);
+            paint.setColor(palette.accent);
             float unit = getWidth() / 36f;
             float radius = unit * 4.2f * scale;
             canvas.drawCircle(cx, cy, radius, paint);
@@ -2685,7 +2678,7 @@ public final class MainActivity extends Activity {
             float cy = getHeight() / 2f;
             float unit = getWidth() / 36f;
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(palette.sub);
+            paint.setColor(palette.accent);
             canvas.drawCircle(cx - unit * 1.8f, cy, unit * 7.8f, paint);
             paint.setColor(palette.surface);
             canvas.drawCircle(cx + unit * 2.2f, cy - unit * 2.3f, unit * 7.8f, paint);
@@ -2699,7 +2692,7 @@ public final class MainActivity extends Activity {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeWidth(unit * 1.45f);
-            paint.setColor(palette.sub);
+            paint.setColor(palette.accent);
             oval.set(cx - unit * 12.5f, cy - unit * 12.5f, cx + unit * 12.5f, cy + unit * 12.5f);
             canvas.drawArc(oval, 210, 245, false, paint);
             path.reset();
