@@ -215,7 +215,7 @@ def center(bounds):
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-tap.xml").getroot()
 texts = {node.attrib.get("text", "") for node in root.iter("node")}
-if "Update task" not in texts:
+if "Save" not in texts:
     raise AssertionError("Tapping a task did not expand its edit sheet")
 cancel = next(node for node in root.iter("node") if node.attrib.get("text") == "Cancel")
 x, y = center(cancel.attrib["bounds"])
