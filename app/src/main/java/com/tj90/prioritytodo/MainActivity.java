@@ -113,6 +113,7 @@ public final class MainActivity extends Activity {
     private View fab;
     private View fabTarget;
     private View reachArc;
+    private String expandedTaskKey;
 
     // ---- FAB drag-to-reposition ----
     private boolean fabDragging;
@@ -258,7 +259,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("How it works")
                 .setMessage("• Tap  +  to add a task. It sorts itself by priority.\n\n"
-                        + "• Tap a task to open and edit its details.\n\n"
+                        + "• Tap a task to expand its details. Long-press it to edit.\n\n"
                         + "• Tap Adjust to set impact & effort, or mark it Urgent to send it to #1.\n\n"
                         + "• Swipe a task toward your thumb to finish it, the other way for Later.\n\n"
                         + "• Drag the  +  button (or tap the hand icon) to switch it between left, center and right.")
@@ -735,6 +736,9 @@ public final class MainActivity extends Activity {
                     PriorityPalette.withAlpha(accent, 0x26));
             heroFg.addView(remind, matchWrap(0, 11, 0, 0));
         }
+        if (isTaskExpanded("hero", mit.id)) {
+            heroFg.addView(buildExpandedTaskDetails(mit, accent), matchWrap(0, 12, 0, 0));
+        }
         heroWrap.addView(heroFg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
@@ -835,7 +839,11 @@ public final class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams circleParams = new LinearLayout.LayoutParams(dp(18), dp(18));
         circleParams.rightMargin = dp(14);
-        circleParams.gravity = Gravity.CENTER_VERTICAL;
+        circleParams.gravity = isTaskExpanded("row", task.id)
+                ? Gravity.TOP : Gravity.CENTER_VERTICAL;
+        if (isTaskExpanded("row", task.id)) {
+            circleParams.topMargin = dp(2);
+        }
         fg.addView(circle, circleParams);
 
         LinearLayout copy = vertical();
@@ -849,6 +857,9 @@ public final class MainActivity extends Activity {
             TextView meta = text("⏰ " + reminderShort(task), 11, 600, palette.sub);
             metaRow.addView(meta, wrap(0, 0, 0, 0));
             copy.addView(metaRow, matchWrap(0, 4, 0, 0));
+        }
+        if (isTaskExpanded("row", task.id)) {
+            copy.addView(buildExpandedTaskDetails(task, tier), matchWrap(0, 10, 0, 0));
         }
         fg.addView(copy, weight(1, 0, 0, 0, 0));
 
@@ -864,6 +875,63 @@ public final class MainActivity extends Activity {
 
         attachRowSwipe(fg, reveal, task.id);
         return wrap;
+    }
+
+    private LinearLayout buildExpandedTaskDetails(TodoTask task, int accent) {
+        LinearLayout details = vertical();
+        details.setContentDescription("Expanded details for " + task.title);
+
+        View rule = new View(this);
+        rule.setBackgroundColor(PriorityPalette.withAlpha(accent, 0x66));
+        details.addView(rule, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
+
+        String priority = "Impact: " + impactLabel(task.impact)
+                + "  ·  Effort: " + impactLabel(task.effort);
+        details.addView(text(priority, 12, 700, palette.ink), matchWrap(0, 9, 0, 0));
+
+        List<String> attributes = new ArrayList<>();
+        if (task.urgent) {
+            attributes.add("Urgent");
+        }
+        if (task.quickTask) {
+            attributes.add("Quick win");
+        }
+        if (!"None".equals(task.dependency)) {
+            attributes.add(task.dependency + " dependency");
+        }
+        if (task.category != null) {
+            attributes.add("List: " + task.category);
+        }
+        if (!attributes.isEmpty()) {
+            details.addView(text(TextUtils.join("  ·  ", attributes), 12, 600, palette.sub),
+                    matchWrap(0, 5, 0, 0));
+        }
+        if (!TextUtils.isEmpty(task.notes)) {
+            details.addView(text(task.notes, 13, 500, palette.ink), matchWrap(0, 7, 0, 0));
+        }
+        if (task.reminderAt > 0) {
+            String reminder = "Reminder: " + reminderShort(task);
+            if (task.repeatsReminder()) {
+                reminder += "  ·  " + task.recurrenceLabel();
+            }
+            details.addView(text(reminder, 12, 600, palette.sub), matchWrap(0, 5, 0, 0));
+        }
+
+        TextView editHint = text("Long-press to edit", 11, 600, palette.sub);
+        editHint.setAlpha(0.8f);
+        details.addView(editHint, matchWrap(0, 8, 0, 0));
+        return details;
+    }
+
+    private boolean isTaskExpanded(String surface, String id) {
+        return (surface + ":" + id).equals(expandedTaskKey);
+    }
+
+    private void toggleTaskExpansion(String surface, String id) {
+        String key = surface + ":" + id;
+        expandedTaskKey = key.equals(expandedTaskKey) ? null : key;
+        renderAll(false);
     }
 
     // ===================== gestures =====================
@@ -920,7 +988,7 @@ public final class MainActivity extends Activity {
                             && event.getActionMasked() == MotionEvent.ACTION_UP) {
                         v.setTranslationX(0f);
                         reveal.setVisibility(View.INVISIBLE);
-                        openEditSheet(id);
+                        toggleTaskExpansion("row", id);
                     } else {
                         v.animate().translationX(0f).setDuration(220).start();
                         reveal.setVisibility(View.INVISIBLE);
@@ -936,17 +1004,28 @@ public final class MainActivity extends Activity {
     private void attachHeroSwipe(View fg, TextView reveal, String id) {
         final float[] startX = new float[1];
         final boolean[] moved = new boolean[1];
+        final boolean[] longPressed = new boolean[1];
+        final Runnable[] longPress = new Runnable[1];
         fg.setOnTouchListener((v, event) -> {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     startX[0] = event.getRawX();
                     moved[0] = false;
+                    longPressed[0] = false;
+                    longPress[0] = () -> {
+                        if (!moved[0]) {
+                            longPressed[0] = true;
+                            openEditSheet(id);
+                        }
+                    };
+                    handler.postDelayed(longPress[0], 480);
                     return true;
                 case MotionEvent.ACTION_MOVE: {
                     float dx = event.getRawX() - startX[0];
                     if (!moved[0]) {
                         if (Math.abs(dx) > dp(6)) {
                             moved[0] = true;
+                            handler.removeCallbacks(longPress[0]);
                         } else {
                             return true;
                         }
@@ -957,6 +1036,7 @@ public final class MainActivity extends Activity {
                 }
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL: {
+                    handler.removeCallbacks(longPress[0]);
                     float dx = event.getRawX() - startX[0];
                     if (moved[0] && Math.abs(dx) >= dp(72)) {
                         int dir = dx > 0 ? 1 : -1;
@@ -965,10 +1045,11 @@ public final class MainActivity extends Activity {
                         } else {
                             laterTask(id);
                         }
-                    } else if (!moved[0] && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    } else if (!moved[0] && !longPressed[0]
+                            && event.getActionMasked() == MotionEvent.ACTION_UP) {
                         v.setTranslationX(0f);
                         reveal.setVisibility(View.INVISIBLE);
-                        openEditSheet(id);
+                        toggleTaskExpansion("hero", id);
                     } else {
                         v.animate().translationX(0f).setDuration(220).start();
                         reveal.setVisibility(View.INVISIBLE);

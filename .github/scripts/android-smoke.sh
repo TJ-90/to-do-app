@@ -189,8 +189,9 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-add.xml").getroot()
-task = next(node for node in root.iter("node")
-            if node.attrib.get("text") in {"CI task", "CI_task"})
+tasks = [node for node in root.iter("node")
+         if node.attrib.get("text") in {"CI task", "CI_task"}]
+task = max(tasks, key=lambda node: center(node.attrib["bounds"])[1])
 x, y = center(task.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/task-row-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
@@ -214,9 +215,35 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-tap.xml").getroot()
+descriptions = {node.attrib.get("content-desc", "") for node in root.iter("node")}
+if not descriptions.intersection({
+        "Expanded details for CI task", "Expanded details for CI_task"}):
+    raise AssertionError("Tapping a task did not expand its inline details")
+texts = {node.attrib.get("text", "") for node in root.iter("node")}
+if "Save" in texts:
+    raise AssertionError("Tapping a task opened the edit sheet instead of inline details")
+PY
+
+adb shell input swipe "$task_x" "$task_y" "$task_x" "$task_y" 700
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/03c-after-task-long-press.png"
+adb shell uiautomator dump /sdcard/window-after-task-long-press.xml
+adb pull /sdcard/window-after-task-long-press.xml "$SCREENSHOT_DIR/window-after-task-long-press.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-long-press.xml").getroot()
 texts = {node.attrib.get("text", "") for node in root.iter("node")}
 if "Save" not in texts:
-    raise AssertionError("Tapping a task did not expand its edit sheet")
+    raise AssertionError("Long-pressing a task did not open its edit sheet")
 cancel = next(node for node in root.iter("node") if node.attrib.get("text") == "Cancel")
 x, y = center(cancel.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/edit-cancel-center.txt", "w") as f:
