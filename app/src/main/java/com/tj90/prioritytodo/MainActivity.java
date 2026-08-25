@@ -259,7 +259,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("How it works")
                 .setMessage("• Tap  +  to add a task. It sorts itself by priority.\n\n"
-                        + "• Tap a task to expand its details. Long-press it to edit.\n\n"
+                        + "• Tap a task to reveal its full content. Long-press it to edit.\n\n"
                         + "• Tap Adjust to set impact & effort, or mark it Urgent to send it to #1.\n\n"
                         + "• Swipe a task toward your thumb to finish it, the other way for Later.\n\n"
                         + "• Drag the  +  button (or tap the hand icon) to switch it between left, center and right.")
@@ -721,23 +721,28 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout heroFg = vertical();
+        boolean heroExpanded = isTaskExpanded("hero", mit.id);
+        if (heroExpanded) {
+            heroFg.setContentDescription("Expanded content for " + mit.title);
+        }
         TextView kicker = text("YOUR #1 RIGHT NOW", 11, 800, accent);
         kicker.setLetterSpacing(0.1f);
         heroFg.addView(kicker, matchWrap(0, 0, 0, 9));
 
         TextView mitName = text(mit.title, 23, 800, palette.heroInk);
         mitName.setSingleLine(false);
-        mitName.setMaxLines(3);
-        mitName.setEllipsize(TextUtils.TruncateAt.END);
+        mitName.setMaxLines(heroExpanded ? Integer.MAX_VALUE : 3);
+        mitName.setEllipsize(heroExpanded ? null : TextUtils.TruncateAt.END);
         heroFg.addView(mitName);
+
+        if (heroExpanded && !TextUtils.isEmpty(mit.notes)) {
+            heroFg.addView(text(mit.notes, 13, 500, palette.heroSub), matchWrap(0, 8, 0, 0));
+        }
 
         if (mit.reminderAt > 0) {
             TextView remind = chipText(reminderShort(mit), accent,
                     PriorityPalette.withAlpha(accent, 0x26));
             heroFg.addView(remind, matchWrap(0, 11, 0, 0));
-        }
-        if (isTaskExpanded("hero", mit.id)) {
-            heroFg.addView(buildExpandedTaskDetails(mit, accent), matchWrap(0, 12, 0, 0));
         }
         heroWrap.addView(heroFg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
@@ -837,29 +842,34 @@ public final class MainActivity extends Activity {
             confettiView.burst(cx, cy, CONFETTI_COLORS);
             completeTask(task.id);
         });
+        boolean rowExpanded = isTaskExpanded("row", task.id);
         LinearLayout.LayoutParams circleParams = new LinearLayout.LayoutParams(dp(18), dp(18));
         circleParams.rightMargin = dp(14);
-        circleParams.gravity = isTaskExpanded("row", task.id)
-                ? Gravity.TOP : Gravity.CENTER_VERTICAL;
-        if (isTaskExpanded("row", task.id)) {
+        circleParams.gravity = rowExpanded ? Gravity.TOP : Gravity.CENTER_VERTICAL;
+        if (rowExpanded) {
             circleParams.topMargin = dp(2);
         }
         fg.addView(circle, circleParams);
 
         LinearLayout copy = vertical();
+        if (rowExpanded) {
+            copy.setContentDescription("Expanded content for " + task.title);
+        }
         TextView name = text(task.title, 16, 600, palette.ink);
-        name.setSingleLine(true);
-        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setSingleLine(!rowExpanded);
+        name.setMaxLines(rowExpanded ? Integer.MAX_VALUE : 1);
+        name.setEllipsize(rowExpanded ? null : TextUtils.TruncateAt.END);
         copy.addView(name);
+
+        if (rowExpanded && !TextUtils.isEmpty(task.notes)) {
+            copy.addView(text(task.notes, 13, 500, palette.sub), matchWrap(0, 7, 0, 0));
+        }
 
         if (task.reminderAt > 0) {
             LinearLayout metaRow = horizontal();
             TextView meta = text("⏰ " + reminderShort(task), 11, 600, palette.sub);
             metaRow.addView(meta, wrap(0, 0, 0, 0));
             copy.addView(metaRow, matchWrap(0, 4, 0, 0));
-        }
-        if (isTaskExpanded("row", task.id)) {
-            copy.addView(buildExpandedTaskDetails(task, tier), matchWrap(0, 10, 0, 0));
         }
         fg.addView(copy, weight(1, 0, 0, 0, 0));
 
@@ -875,53 +885,6 @@ public final class MainActivity extends Activity {
 
         attachRowSwipe(fg, reveal, task.id);
         return wrap;
-    }
-
-    private LinearLayout buildExpandedTaskDetails(TodoTask task, int accent) {
-        LinearLayout details = vertical();
-        details.setContentDescription("Expanded details for " + task.title);
-
-        View rule = new View(this);
-        rule.setBackgroundColor(PriorityPalette.withAlpha(accent, 0x66));
-        details.addView(rule, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
-
-        String priority = "Impact: " + impactLabel(task.impact)
-                + "  ·  Effort: " + impactLabel(task.effort);
-        details.addView(text(priority, 12, 700, palette.ink), matchWrap(0, 9, 0, 0));
-
-        List<String> attributes = new ArrayList<>();
-        if (task.urgent) {
-            attributes.add("Urgent");
-        }
-        if (task.quickTask) {
-            attributes.add("Quick win");
-        }
-        if (!"None".equals(task.dependency)) {
-            attributes.add(task.dependency + " dependency");
-        }
-        if (task.category != null) {
-            attributes.add("List: " + task.category);
-        }
-        if (!attributes.isEmpty()) {
-            details.addView(text(TextUtils.join("  ·  ", attributes), 12, 600, palette.sub),
-                    matchWrap(0, 5, 0, 0));
-        }
-        if (!TextUtils.isEmpty(task.notes)) {
-            details.addView(text(task.notes, 13, 500, palette.ink), matchWrap(0, 7, 0, 0));
-        }
-        if (task.reminderAt > 0) {
-            String reminder = "Reminder: " + reminderShort(task);
-            if (task.repeatsReminder()) {
-                reminder += "  ·  " + task.recurrenceLabel();
-            }
-            details.addView(text(reminder, 12, 600, palette.sub), matchWrap(0, 5, 0, 0));
-        }
-
-        TextView editHint = text("Long-press to edit", 11, 600, palette.sub);
-        editHint.setAlpha(0.8f);
-        details.addView(editHint, matchWrap(0, 8, 0, 0));
-        return details;
     }
 
     private boolean isTaskExpanded(String surface, String id) {

@@ -120,7 +120,7 @@ PY
 read title_x title_y < "$SCREENSHOT_DIR/title-input-center.txt"
 adb shell input tap "$title_x" "$title_y"
 sleep 1
-adb shell input text CI_task
+adb shell input text CI_task_with_a_long_title_that_should_wrap_fully
 sleep 1
 adb exec-out screencap -p > "$SCREENSHOT_DIR/02b-keyboard-open.png"
 adb shell uiautomator dump /sdcard/window-keyboard-open.xml
@@ -190,11 +190,14 @@ def center(bounds):
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-add.xml").getroot()
 tasks = [node for node in root.iter("node")
-         if node.attrib.get("text") in {"CI task", "CI_task"}]
+         if node.attrib.get("text", "").startswith("CI_task")]
 task = max(tasks, key=lambda node: center(node.attrib["bounds"])[1])
 x, y = center(task.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/task-row-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
+with open(f"{SCREENSHOT_DIR}/task-row-collapsed-height.txt", "w") as f:
+    _, y1, _, y2 = map(int, re.findall(r"\d+", task.attrib["bounds"]))
+    f.write(f"{y2 - y1}\n")
 PY
 
 read task_x task_y < "$SCREENSHOT_DIR/task-row-center.txt"
@@ -215,13 +218,22 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-tap.xml").getroot()
-descriptions = {node.attrib.get("content-desc", "") for node in root.iter("node")}
-if not descriptions.intersection({
-        "Expanded details for CI task", "Expanded details for CI_task"}):
-    raise AssertionError("Tapping a task did not expand its inline details")
+expanded = next((node for node in root.iter("node")
+                 if node.attrib.get("content-desc", "").startswith(
+                         "Expanded content for CI_task")), None)
+if expanded is None:
+    raise AssertionError("Tapping a task did not reveal its full content")
+with open(f"{SCREENSHOT_DIR}/task-row-collapsed-height.txt") as f:
+    collapsed_height = int(f.read().strip())
+expanded_bounds = list(map(int, re.findall(r"\d+", expanded.attrib["bounds"])))
+if expanded_bounds[3] - expanded_bounds[1] <= collapsed_height:
+    raise AssertionError("Expanded task content did not wrap beyond one line")
 texts = {node.attrib.get("text", "") for node in root.iter("node")}
 if "Save" in texts:
-    raise AssertionError("Tapping a task opened the edit sheet instead of inline details")
+    raise AssertionError("Tapping a task opened the edit sheet instead of its content")
+if any(text.startswith("Impact:") or text in {"Quick win", "Long-press to edit"}
+       for text in texts):
+    raise AssertionError("Task expansion exposed priority metadata instead of task content")
 PY
 
 adb shell input swipe "$task_x" "$task_y" "$task_x" "$task_y" 700
