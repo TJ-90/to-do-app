@@ -9,7 +9,8 @@ import java.util.Map;
 final class CsvCodec {
     private static final String[] HEADERS = {
             "id", "title", "notes", "completed", "impact", "effort", "urgent", "quickTask",
-            "category", "dependency", "reminderAt", "repeatUnit", "repeatEvery", "createdAt"
+            "snoozed", "recurringMit", "category", "dependency", "reminderAt", "repeatUnit",
+            "repeatEvery", "createdAt"
     };
 
     private CsvCodec() { }
@@ -27,6 +28,8 @@ final class CsvCodec {
                     task.effort,
                     Boolean.toString(task.urgent),
                     Boolean.toString(task.quickTask),
+                    Boolean.toString(task.snoozed),
+                    Boolean.toString(task.recurringMit),
                     task.category == null ? "" : task.category,
                     task.dependency,
                     Long.toString(task.reminderAt),
@@ -63,6 +66,8 @@ final class CsvCodec {
             task.effort = level(value(row, columns, "effort"), TodoTask.MEDIUM);
             task.urgent = bool(value(row, columns, "urgent"));
             task.quickTask = bool(value(row, columns, "quickTask"));
+            task.snoozed = bool(value(row, columns, "snoozed"));
+            task.recurringMit = bool(value(row, columns, "recurringMit"));
             String category = value(row, columns, "category").trim();
             task.category = category.isEmpty() ? null : category;
             String dependency = value(row, columns, "dependency").trim();

@@ -92,6 +92,8 @@ public final class TodoTaskTest {
         task.effort = TodoTask.LOW;
         task.urgent = true;
         task.quickTask = true;
+        task.snoozed = true;
+        task.recurringMit = true;
         task.category = "Work";
         task.dependency = "Sequential";
         task.reminderAt = 123456L;
@@ -111,6 +113,8 @@ public final class TodoTaskTest {
         assertEquals(TodoTask.LOW, copy.effort);
         assertTrue(copy.urgent);
         assertTrue(copy.quickTask);
+        assertTrue(copy.snoozed);
+        assertTrue(copy.recurringMit);
         assertEquals("Work", copy.category);
         assertEquals("Sequential", copy.dependency);
         assertEquals(123456L, copy.reminderAt);

@@ -189,6 +189,57 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-add.xml").getroot()
+task = next(node for node in root.iter("node")
+            if node.attrib.get("text") in {"CI task", "CI_task"})
+x, y = center(task.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/task-row-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read task_x task_y < "$SCREENSHOT_DIR/task-row-center.txt"
+adb shell input tap "$task_x" "$task_y"
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/03b-after-task-tap.png"
+adb shell uiautomator dump /sdcard/window-after-task-tap.xml
+adb pull /sdcard/window-after-task-tap.xml "$SCREENSHOT_DIR/window-after-task-tap.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-tap.xml").getroot()
+texts = {node.attrib.get("text", "") for node in root.iter("node")}
+if "Update task" not in texts:
+    raise AssertionError("Tapping a task did not expand its edit sheet")
+cancel = next(node for node in root.iter("node") if node.attrib.get("text") == "Cancel")
+x, y = center(cancel.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/edit-cancel-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read cancel_x cancel_y < "$SCREENSHOT_DIR/edit-cancel-center.txt"
+adb shell input tap "$cancel_x" "$cancel_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-after-edit-close.xml
+adb pull /sdcard/window-after-edit-close.xml "$SCREENSHOT_DIR/window-after-edit-close.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-edit-close.xml").getroot()
 checkbox = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.CheckBox")
 x, y = center(checkbox.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/checkbox-center.txt", "w") as f:

@@ -258,6 +258,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("How it works")
                 .setMessage("• Tap  +  to add a task. It sorts itself by priority.\n\n"
+                        + "• Tap a task to open and edit its details.\n\n"
                         + "• Tap Adjust to set impact & effort, or mark it Urgent to send it to #1.\n\n"
                         + "• Swipe a task toward your thumb to finish it, the other way for Later.\n\n"
                         + "• Drag the  +  button (or tap the hand icon) to switch it between left, center and right.")
@@ -874,14 +875,17 @@ public final class MainActivity extends Activity {
     private void attachRowSwipe(View fg, TextView reveal, String id) {
         final float[] startX = new float[1];
         final boolean[] moved = new boolean[1];
+        final boolean[] longPressed = new boolean[1];
         final Runnable[] longPress = new Runnable[1];
         fg.setOnTouchListener((v, event) -> {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     startX[0] = event.getRawX();
                     moved[0] = false;
+                    longPressed[0] = false;
                     longPress[0] = () -> {
                         if (!moved[0]) {
+                            longPressed[0] = true;
                             openEditSheet(id);
                         }
                     };
@@ -912,6 +916,11 @@ public final class MainActivity extends Activity {
                         } else {
                             animateRowOut(v, dir, () -> laterTask(id));
                         }
+                    } else if (!moved[0] && !longPressed[0]
+                            && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        v.setTranslationX(0f);
+                        reveal.setVisibility(View.INVISIBLE);
+                        openEditSheet(id);
                     } else {
                         v.animate().translationX(0f).setDuration(220).start();
                         reveal.setVisibility(View.INVISIBLE);
@@ -956,6 +965,10 @@ public final class MainActivity extends Activity {
                         } else {
                             laterTask(id);
                         }
+                    } else if (!moved[0] && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        v.setTranslationX(0f);
+                        reveal.setVisibility(View.INVISIBLE);
+                        openEditSheet(id);
                     } else {
                         v.animate().translationX(0f).setDuration(220).start();
                         reveal.setVisibility(View.INVISIBLE);
