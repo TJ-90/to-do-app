@@ -91,54 +91,6 @@ PY
   *) exit 1 ;;
 esac
 
-python3 - <<'PY'
-import re
-import xml.etree.ElementTree as ET
-
-SCREENSHOT_DIR = "app/build/verification-screenshots"
-
-def center(bounds):
-    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
-    return (x1 + x2) // 2, (y1 + y2) // 2
-
-root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
-add_list = next(node for node in root.iter("node")
-                if node.attrib.get("content-desc") == "Add list")
-x, y = center(add_list.attrib["bounds"])
-with open(f"{SCREENSHOT_DIR}/add-list-center.txt", "w") as f:
-    f.write(f"{x} {y}\n")
-PY
-
-read add_list_x add_list_y < "$SCREENSHOT_DIR/add-list-center.txt"
-adb shell input tap "$add_list_x" "$add_list_y"
-sleep 1
-adb shell uiautomator dump /sdcard/window-add-list.xml
-adb pull /sdcard/window-add-list.xml "$SCREENSHOT_DIR/window-add-list.xml"
-
-python3 - <<'PY'
-import re
-import xml.etree.ElementTree as ET
-
-SCREENSHOT_DIR = "app/build/verification-screenshots"
-
-def center(bounds):
-    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
-    return (x1 + x2) // 2, (y1 + y2) // 2
-
-root = ET.parse(f"{SCREENSHOT_DIR}/window-add-list.xml").getroot()
-edit = next(node for node in root.iter("node")
-            if node.attrib.get("class") == "android.widget.EditText")
-x, y = center(edit.attrib["bounds"])
-with open(f"{SCREENSHOT_DIR}/list-name-center.txt", "w") as f:
-    f.write(f"{x} {y}\n")
-PY
-
-read list_name_x list_name_y < "$SCREENSHOT_DIR/list-name-center.txt"
-adb shell input tap "$list_name_x" "$list_name_y"
-adb shell input text Work
-adb shell input keyevent KEYCODE_ENTER
-sleep 2
-
 read add_x add_y < "$SCREENSHOT_DIR/add-affordance-center.txt"
 adb shell input tap "$add_x" "$add_y"
 sleep 2
@@ -160,6 +112,91 @@ def center(bounds):
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-add-panel.xml").getroot()
 edit = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.EditText")
+x, y = center(edit.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/title-input-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+list_pill = next(node for node in root.iter("node")
+                 if node.attrib.get("content-desc", "").startswith("List: No list"))
+x, y = center(list_pill.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/initial-list-pill-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read initial_list_x initial_list_y < "$SCREENSHOT_DIR/initial-list-pill-center.txt"
+adb shell input tap "$initial_list_x" "$initial_list_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-initial-list-picker.xml
+adb pull /sdcard/window-initial-list-picker.xml "$SCREENSHOT_DIR/window-initial-list-picker.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-initial-list-picker.xml").getroot()
+new_list = next(node for node in root.iter("node") if node.attrib.get("text") == "＋ New list")
+x, y = center(new_list.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/new-list-choice-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read new_list_x new_list_y < "$SCREENSHOT_DIR/new-list-choice-center.txt"
+adb shell input tap "$new_list_x" "$new_list_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-create-list.xml
+adb pull /sdcard/window-create-list.xml "$SCREENSHOT_DIR/window-create-list.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-create-list.xml").getroot()
+edit = next(node for node in root.iter("node")
+            if node.attrib.get("class") == "android.widget.EditText")
+x, y = center(edit.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/new-list-name-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read new_list_name_x new_list_name_y < "$SCREENSHOT_DIR/new-list-name-center.txt"
+adb shell input tap "$new_list_name_x" "$new_list_name_y"
+adb shell input text Work
+adb shell input keyevent KEYCODE_ENTER
+sleep 2
+if adb shell dumpsys input_method | grep -q 'mInputShown=true'; then
+  adb shell input keyevent KEYCODE_BACK || true
+  sleep 1
+fi
+adb shell uiautomator dump /sdcard/window-after-list-create.xml
+adb pull /sdcard/window-after-list-create.xml "$SCREENSHOT_DIR/window-after-list-create.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-list-create.xml").getroot()
+if not any(node.attrib.get("content-desc", "").startswith("List: Work")
+           for node in root.iter("node")):
+    raise AssertionError("New list was not assigned through the sheet picker")
+edit = next(node for node in root.iter("node")
+            if node.attrib.get("class") == "android.widget.EditText")
 x, y = center(edit.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/title-input-center.txt", "w") as f:
     f.write(f"{x} {y}\n")

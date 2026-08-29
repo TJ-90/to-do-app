@@ -1710,17 +1710,14 @@ public final class MainActivity extends Activity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 17, 800, palette.ink);
         titleRow.addView(title, weight(1, 0, 0, 12, 0));
-        listPill = null;
-        if (!categories.isEmpty()) {
-            listPill = text("", 12, 700, palette.sub);
-            listPill.setGravity(Gravity.CENTER);
-            listPill.setSingleLine(true);
-            listPill.setMaxWidth(dp(120));
-            listPill.setEllipsize(TextUtils.TruncateAt.END);
-            listPill.setPadding(dp(12), dp(8), dp(12), dp(8));
-            listPill.setOnClickListener(v -> showListPicker());
-            titleRow.addView(listPill, wrap(0, 0, 0, 0));
-        }
+        listPill = text("", 12, 700, palette.sub);
+        listPill.setGravity(Gravity.CENTER);
+        listPill.setSingleLine(true);
+        listPill.setMaxWidth(dp(120));
+        listPill.setEllipsize(TextUtils.TruncateAt.END);
+        listPill.setPadding(dp(12), dp(8), dp(12), dp(8));
+        listPill.setOnClickListener(v -> showListPicker());
+        titleRow.addView(listPill, wrap(0, 0, 0, 0));
         content.addView(titleRow, matchWrap(0, 0, 0, 13));
 
         sheetInput = new EditText(this);
@@ -1762,9 +1759,7 @@ public final class MainActivity extends Activity {
             return false;
         });
         content.addView(sheetInput, matchWrap(0, 0, 0, 0));
-        if (listPill != null) {
-            listPill.setAccessibilityTraversalAfter(sheetInput.getId());
-        }
+        listPill.setAccessibilityTraversalAfter(sheetInput.getId());
 
         addDetailsRow = text("＋  Add details", 13, 700, palette.sub);
         addDetailsRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -1904,10 +1899,10 @@ public final class MainActivity extends Activity {
     }
 
     private void showListPicker() {
-        if (listPill == null || categories.isEmpty()) {
+        if (listPill == null) {
             return;
         }
-        String[] choices = new String[categories.size() + 1];
+        String[] choices = new String[categories.size() + 2];
         choices[0] = "No list";
         int checked = 0;
         for (int i = 0; i < categories.size(); i++) {
@@ -1916,9 +1911,16 @@ public final class MainActivity extends Activity {
                 checked = i + 1;
             }
         }
+        int createIndex = choices.length - 1;
+        choices[createIndex] = "＋ New list";
         new AlertDialog.Builder(this)
                 .setTitle("Move to list")
                 .setSingleChoiceItems(choices, checked, (dialog, which) -> {
+                    if (which == createIndex) {
+                        dialog.dismiss();
+                        showCreateListForTask();
+                        return;
+                    }
                     draftCategory = which == 0 ? null : categories.get(which - 1);
                     styleListPill();
                     String destination = listPillLabel(draftCategory);
@@ -1927,6 +1929,60 @@ public final class MainActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void showCreateListForTask() {
+        EditText input = new EditText(this);
+        input.setHint("New list name");
+        input.setSingleLine(true);
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.setTextColor(palette.ink);
+        input.setHintTextColor(palette.sub);
+        input.setSelectAllOnFocus(true);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("New list")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Create", (ignored, which) -> createAndAssignList(input.getText().toString()))
+                .create();
+        input.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                createAndAssignList(input.getText().toString());
+                dialog.dismiss();
+                return true;
+            }
+            return false;
+        });
+        dialog.setOnShowListener(ignored -> {
+            input.requestFocus();
+            input.post(() -> {
+                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+                }
+            });
+        });
+        dialog.show();
+    }
+
+    private void createAndAssignList(String value) {
+        String name = value == null ? "" : value.trim();
+        if (name.isEmpty() || "all".equalsIgnoreCase(name)) {
+            return;
+        }
+        for (String existing : categories) {
+            if (existing.equalsIgnoreCase(name)) {
+                draftCategory = existing;
+                styleListPill();
+                return;
+            }
+        }
+        categories.add(name);
+        store.saveCategories(categories);
+        draftCategory = name;
+        renderCategoryStrip();
+        styleListPill();
+        listPill.announceForAccessibility("Created and moved to " + name);
     }
 
     private void styleListPill() {
