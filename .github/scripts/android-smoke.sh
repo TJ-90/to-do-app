@@ -167,16 +167,34 @@ edit = next(node for node in root.iter("node")
 x, y = center(edit.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/new-list-name-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
+PY
+
+read new_list_name_x new_list_name_y < "$SCREENSHOT_DIR/new-list-name-center.txt"
+adb shell input tap "$new_list_name_x" "$new_list_name_y"
+adb shell input text Work
+adb shell input keyevent KEYCODE_BACK || true
+sleep 1
+adb shell uiautomator dump /sdcard/window-create-list-filled.xml
+adb pull /sdcard/window-create-list-filled.xml "$SCREENSHOT_DIR/window-create-list-filled.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-create-list-filled.xml").getroot()
 create = next(node for node in root.iter("node") if node.attrib.get("text") == "CREATE")
 x, y = center(create.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/create-list-button-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
 
-read new_list_name_x new_list_name_y < "$SCREENSHOT_DIR/new-list-name-center.txt"
 read create_list_x create_list_y < "$SCREENSHOT_DIR/create-list-button-center.txt"
-adb shell input tap "$new_list_name_x" "$new_list_name_y"
-adb shell input text Work
 adb shell input tap "$create_list_x" "$create_list_y"
 sleep 2
 if adb shell dumpsys input_method | grep -q 'mInputShown=true'; then
