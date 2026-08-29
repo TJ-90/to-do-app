@@ -8,7 +8,9 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class TodoTaskTest {
     @Test
@@ -49,18 +51,78 @@ public final class TodoTaskTest {
     }
 
     @Test
-    public void scoreStillPrioritizesUrgentTasksAboveNonUrgentTasks() {
-        TodoTask normal = new TodoTask();
-        normal.impact = TodoTask.HIGH;
-        normal.effort = TodoTask.LOW;
+    public void scoreMatrixIsExactUniqueAndUrgentlyPartitioned() {
+        double[][] expected = {
+                {303, 453, 903},
+                {202, 302, 602},
+                {101, 151, 301}
+        };
+        String[] levels = {TodoTask.HIGH, TodoTask.MEDIUM, TodoTask.LOW};
+        Set<Double> scores = new HashSet<>();
+        double normalMaximum = Double.NEGATIVE_INFINITY;
+        double urgentMinimum = Double.POSITIVE_INFINITY;
 
-        TodoTask urgent = new TodoTask();
-        urgent.impact = TodoTask.LOW;
-        urgent.effort = TodoTask.HIGH;
-        urgent.urgent = true;
+        for (int impact = 0; impact < levels.length; impact++) {
+            for (int effort = 0; effort < levels.length; effort++) {
+                double normal = score(levels[impact], levels[effort], false, false);
+                double urgent = score(levels[impact], levels[effort], true, false);
+                assertEquals(expected[impact][effort], normal, 0.0);
+                assertEquals(normal + 1000, urgent, 0.0);
+                scores.add(normal);
+                scores.add(urgent);
+                normalMaximum = Math.max(normalMaximum, normal);
+                urgentMinimum = Math.min(urgentMinimum, urgent);
+            }
+        }
 
-        assertTrue(urgent.score() > normal.score());
-        assertEquals("Immediate", urgent.bucket());
+        assertEquals(18, scores.size());
+        assertEquals(903, normalMaximum, 0.0);
+        assertEquals(1101, urgentMinimum, 0.0);
+        assertTrue(urgentMinimum > normalMaximum);
+    }
+
+    @Test
+    public void scoreOrdersTasksByReturnOnEffort() {
+        double[] increasingRoiScores = {
+                score(TodoTask.LOW, TodoTask.HIGH, false, false),
+                score(TodoTask.LOW, TodoTask.MEDIUM, false, false),
+                score(TodoTask.MEDIUM, TodoTask.HIGH, false, false),
+                score(TodoTask.LOW, TodoTask.LOW, false, false),
+                score(TodoTask.HIGH, TodoTask.MEDIUM, false, false),
+                score(TodoTask.MEDIUM, TodoTask.LOW, false, false),
+                score(TodoTask.HIGH, TodoTask.LOW, false, false)
+        };
+
+        for (int index = 1; index < increasingRoiScores.length; index++) {
+            assertTrue(increasingRoiScores[index] > increasingRoiScores[index - 1]);
+        }
+    }
+
+    @Test
+        assertTrue(score(TodoTask.LOW, TodoTask.LOW, false, false)
+                < score(TodoTask.MEDIUM, TodoTask.MEDIUM, false, false));
+        assertTrue(score(TodoTask.MEDIUM, TodoTask.MEDIUM, false, false)
+                < score(TodoTask.HIGH, TodoTask.HIGH, false, false));
+    }
+
+    @Test
+    public void scoreBucketsRemainCompatibleWithExistingThresholds() {
+        assertEquals("Immediate", task(TodoTask.LOW, TodoTask.HIGH, true, false).bucket());
+        assertEquals("Next week", task(TodoTask.HIGH, TodoTask.LOW, false, false).bucket());
+        assertEquals("Next week", task(TodoTask.MEDIUM, TodoTask.LOW, false, false).bucket());
+        assertEquals("Someday", task(TodoTask.LOW, TodoTask.HIGH, false, false).bucket());
+    }
+
+    @Test
+    public void snoozedPenaltyKeepsEverySnoozedTaskBelowActiveTasks() {
+        double activeMinimum = score(TodoTask.LOW, TodoTask.HIGH, false, false);
+        double snoozedMaximum = score(TodoTask.HIGH, TodoTask.LOW, true, true);
+
+        assertEquals(101, activeMinimum, 0.0);
+        assertEquals(-3097, snoozedMaximum, 0.0);
+        assertEquals(score(TodoTask.HIGH, TodoTask.LOW, true, false) - 5000,
+                snoozedMaximum, 0.0);
+        assertTrue(snoozedMaximum < activeMinimum);
     }
 
     @Test
@@ -140,5 +202,18 @@ public final class TodoTaskTest {
         assertTrue(task.urgent);
         assertTrue(task.quickTask);
         assertEquals(TodoTask.REPEAT_WEEK, task.reminderRepeatUnit);
+    }
+
+    private static double score(String impact, String effort, boolean urgent, boolean snoozed) {
+        return task(impact, effort, urgent, snoozed).score();
+    }
+
+    private static TodoTask task(String impact, String effort, boolean urgent, boolean snoozed) {
+        TodoTask task = new TodoTask();
+        task.impact = impact;
+        task.effort = effort;
+        task.urgent = urgent;
+        task.snoozed = snoozed;
+        return task;
     }
 }
