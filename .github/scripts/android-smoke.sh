@@ -494,16 +494,42 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-move.xml").getroot()
-if any(node.attrib.get("text", "").startswith("CI_task") for node in root.iter("node")):
-    raise AssertionError("Task remained in its old list after moving to No list")
-all_tab = next(node for node in root.iter("node") if node.attrib.get("text") == "All")
-x, y = center(all_tab.attrib["bounds"])
-with open(f"{SCREENSHOT_DIR}/all-tab-center.txt", "w") as f:
+tasks = [node for node in root.iter("node")
+         if node.attrib.get("text", "").startswith("CI_task")]
+task = max(tasks, key=lambda node: center(node.attrib["bounds"])[1])
+x, y = center(task.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/moved-task-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
 
-read all_x all_y < "$SCREENSHOT_DIR/all-tab-center.txt"
-adb shell input tap "$all_x" "$all_y"
+read moved_task_x moved_task_y < "$SCREENSHOT_DIR/moved-task-center.txt"
+adb shell input swipe "$moved_task_x" "$moved_task_y" "$moved_task_x" "$moved_task_y" 700
+sleep 1
+adb shell uiautomator dump /sdcard/window-after-move-reopen.xml
+adb pull /sdcard/window-after-move-reopen.xml "$SCREENSHOT_DIR/window-after-move-reopen.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-move-reopen.xml").getroot()
+if not any(node.attrib.get("content-desc", "").startswith("List: No list")
+           for node in root.iter("node")):
+    raise AssertionError("Moved task did not persist its No list destination")
+cancel = next(node for node in root.iter("node") if node.attrib.get("text") == "Cancel")
+x, y = center(cancel.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/move-verify-cancel-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read move_cancel_x move_cancel_y < "$SCREENSHOT_DIR/move-verify-cancel-center.txt"
+adb shell input tap "$move_cancel_x" "$move_cancel_y"
 sleep 1
 adb shell uiautomator dump /sdcard/window-after-edit-close.xml
 adb pull /sdcard/window-after-edit-close.xml "$SCREENSHOT_DIR/window-after-edit-close.xml"
