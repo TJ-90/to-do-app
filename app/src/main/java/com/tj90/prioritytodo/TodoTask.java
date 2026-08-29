@@ -34,7 +34,9 @@ final class TodoTask {
     int reminderRepeatEvery = 1;
 
     double score() {
-        double s = ((double) impactValue(impact) / effortValue(effort)) + (urgent ? 1000 : 0);
+        double s = (urgent ? 1000 : 0)
+                + (10 * ((double) impactValue(impact) / effortValue(effort)))
+                + impactRank(impact);
         if (snoozed) {
             s -= 5000;
         }
@@ -166,6 +168,16 @@ final class TodoTask {
             return 20;
         }
         return 10;
+    }
+
+    private static int impactRank(String impact) {
+        if (HIGH.equals(impact)) {
+            return 3;
+        }
+        if (MEDIUM.equals(impact)) {
+            return 2;
+        }
+        return 1;
     }
 
     private static int repeatCalendarField(String unit) {
