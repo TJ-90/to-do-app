@@ -2493,8 +2493,7 @@ public final class MainActivity extends Activity {
             keepNotesCaretVisible();
             return;
         }
-        View target = sheetInput;
-        sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, Math.max(0, target.getTop() - dp(12))));
+        sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, 0));
     }
 
     private void keepNotesCaretVisible() {
