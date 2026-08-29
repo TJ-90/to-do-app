@@ -91,6 +91,54 @@ PY
   *) exit 1 ;;
 esac
 
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
+add_list = next(node for node in root.iter("node")
+                if node.attrib.get("content-desc") == "Add list")
+x, y = center(add_list.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/add-list-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read add_list_x add_list_y < "$SCREENSHOT_DIR/add-list-center.txt"
+adb shell input tap "$add_list_x" "$add_list_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-add-list.xml
+adb pull /sdcard/window-add-list.xml "$SCREENSHOT_DIR/window-add-list.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-add-list.xml").getroot()
+edit = next(node for node in root.iter("node")
+            if node.attrib.get("class") == "android.widget.EditText")
+x, y = center(edit.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/list-name-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read list_name_x list_name_y < "$SCREENSHOT_DIR/list-name-center.txt"
+adb shell input tap "$list_name_x" "$list_name_y"
+adb shell input text Work
+adb shell input keyevent KEYCODE_ENTER
+sleep 2
+
 read add_x add_y < "$SCREENSHOT_DIR/add-affordance-center.txt"
 adb shell input tap "$add_x" "$add_y"
 sleep 2
@@ -137,7 +185,15 @@ def bounds(node):
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-keyboard-open.xml").getroot()
 save = next(node for node in root.iter("node") if node.attrib.get("text") in {"Add task", "Save"})
-edit = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.EditText")
+edits = [node for node in root.iter("node")
+         if node.attrib.get("class") == "android.widget.EditText"]
+if len(edits) != 1:
+    raise AssertionError(f"Collapsed add panel should expose one text field, found {len(edits)}")
+edit = edits[0]
+add_details = next(node for node in root.iter("node")
+                   if node.attrib.get("content-desc") == "Add task details")
+if add_details.attrib.get("visible-to-user") == "false":
+    raise AssertionError("Add details action is not visible while the keyboard is open")
 save_bounds = bounds(save)
 edit_bounds = bounds(edit)
 
@@ -147,7 +203,47 @@ if save_bounds[3] > 900:
     raise AssertionError(f"Add task action is too low with keyboard open: {save_bounds}")
 if edit_bounds[3] > save_bounds[1]:
     raise AssertionError(f"Task input overlaps action row: input={edit_bounds}, action={save_bounds}")
+
+details_bounds = bounds(add_details)
+with open(f"{SCREENSHOT_DIR}/add-details-center.txt", "w") as f:
+    f.write(f"{(details_bounds[0] + details_bounds[2]) // 2} "
+            f"{(details_bounds[1] + details_bounds[3]) // 2}\n")
 PY
+
+read details_x details_y < "$SCREENSHOT_DIR/add-details-center.txt"
+adb shell input tap "$details_x" "$details_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-details-open.xml
+adb pull /sdcard/window-details-open.xml "$SCREENSHOT_DIR/window-details-open.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-details-open.xml").getroot()
+edits = [node for node in root.iter("node")
+         if node.attrib.get("class") == "android.widget.EditText"]
+if len(edits) != 2:
+    raise AssertionError(f"Expanded details panel should expose two text fields, found {len(edits)}")
+notes = edits[1]
+x, y = center(notes.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/notes-input-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read notes_x notes_y < "$SCREENSHOT_DIR/notes-input-center.txt"
+adb shell input tap "$notes_x" "$notes_y"
+adb shell input text Reference_line_one
+adb shell input keyevent KEYCODE_ENTER
+adb shell input text Reference_line_two
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02c-details-keyboard-open.png"
 
 adb shell input keyevent KEYCODE_BACK || true
 sleep 1
@@ -234,6 +330,8 @@ if "Save" in texts:
 if any(text.startswith("Impact:") or text in {"Quick win", "Long-press to edit"}
        for text in texts):
     raise AssertionError("Task expansion exposed priority metadata instead of task content")
+if not any("Reference_line_one" in text and "Reference_line_two" in text for text in texts):
+    raise AssertionError("Expanded task content did not show saved details")
 PY
 
 adb shell input swipe "$task_x" "$task_y" "$task_x" "$task_y" 700
@@ -256,14 +354,96 @@ root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-long-press.xml").getroot()
 texts = {node.attrib.get("text", "") for node in root.iter("node")}
 if "Save" not in texts:
     raise AssertionError("Long-pressing a task did not open its edit sheet")
-cancel = next(node for node in root.iter("node") if node.attrib.get("text") == "Cancel")
-x, y = center(cancel.attrib["bounds"])
-with open(f"{SCREENSHOT_DIR}/edit-cancel-center.txt", "w") as f:
+edits = [node for node in root.iter("node")
+         if node.attrib.get("class") == "android.widget.EditText"]
+notes = edits[1] if len(edits) > 1 else None
+if notes is None or "Reference_line_one" not in notes.attrib.get("text", ""):
+    raise AssertionError("Editing task did not restore saved details")
+list_pill = next((node for node in root.iter("node")
+                  if node.attrib.get("content-desc", "").startswith("List: Work")), None)
+if list_pill is None:
+    raise AssertionError("Edit sheet did not expose current list picker")
+x, y = center(list_pill.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/list-pill-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
 
-read cancel_x cancel_y < "$SCREENSHOT_DIR/edit-cancel-center.txt"
-adb shell input tap "$cancel_x" "$cancel_y"
+read list_pill_x list_pill_y < "$SCREENSHOT_DIR/list-pill-center.txt"
+adb shell input tap "$list_pill_x" "$list_pill_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-list-picker.xml
+adb pull /sdcard/window-list-picker.xml "$SCREENSHOT_DIR/window-list-picker.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-list-picker.xml").getroot()
+no_list = next(node for node in root.iter("node") if node.attrib.get("text") == "No list")
+x, y = center(no_list.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/no-list-choice-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read no_list_x no_list_y < "$SCREENSHOT_DIR/no-list-choice-center.txt"
+adb shell input tap "$no_list_x" "$no_list_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-after-list-choice.xml
+adb pull /sdcard/window-after-list-choice.xml "$SCREENSHOT_DIR/window-after-list-choice.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-list-choice.xml").getroot()
+if not any(node.attrib.get("content-desc", "").startswith("List: No list")
+           for node in root.iter("node")):
+    raise AssertionError("List picker did not update task destination")
+save = next(node for node in root.iter("node") if node.attrib.get("text") == "Save")
+x, y = center(save.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/edit-save-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read edit_save_x edit_save_y < "$SCREENSHOT_DIR/edit-save-center.txt"
+adb shell input tap "$edit_save_x" "$edit_save_y"
+sleep 2
+adb shell uiautomator dump /sdcard/window-after-task-move.xml
+adb pull /sdcard/window-after-task-move.xml "$SCREENSHOT_DIR/window-after-task-move.xml"
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-move.xml").getroot()
+if any(node.attrib.get("text", "").startswith("CI_task") for node in root.iter("node")):
+    raise AssertionError("Task remained in its old list after moving to No list")
+all_tab = next(node for node in root.iter("node") if node.attrib.get("text") == "All")
+x, y = center(all_tab.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/all-tab-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read all_x all_y < "$SCREENSHOT_DIR/all-tab-center.txt"
+adb shell input tap "$all_x" "$all_y"
 sleep 1
 adb shell uiautomator dump /sdcard/window-after-edit-close.xml
 adb pull /sdcard/window-after-edit-close.xml "$SCREENSHOT_DIR/window-after-edit-close.xml"

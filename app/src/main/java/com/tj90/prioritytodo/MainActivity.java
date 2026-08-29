@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -139,6 +140,7 @@ public final class MainActivity extends Activity {
     private String sheetMode = "add";
     private String sheetEditId;
     private String draftName = "";
+    private String draftNotes = "";
     private String draftImpact = TodoTask.LOW;
     private String draftEffort = TodoTask.LOW;
     private String draftDep = "None";
@@ -148,12 +150,16 @@ public final class MainActivity extends Activity {
     private String draftRepeatUnit = TodoTask.REPEAT_NONE;
     private int draftRepeatEvery = 1;
     private boolean detailsExpanded;
+    private boolean notesExpanded;
 
     private FrameLayout sheetOverlay;
     private View sheetScrim;
     private LinearLayout sheetPanel;
     private ScrollView sheetScroll;
     private EditText sheetInput;
+    private EditText notesInput;
+    private TextView addDetailsRow;
+    private TextView listPill;
     private TextView landsPill;
     private TextView detailsSummary;
     private TextView detailsToggle;
@@ -173,7 +179,6 @@ public final class MainActivity extends Activity {
     private String draftCategory;    // sheet draft: the task's list, null = All / unassigned
     private LinearLayout catStrip;
     private EditText addCatInput;
-    private LinearLayout listChipsRow;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -736,7 +741,10 @@ public final class MainActivity extends Activity {
         heroFg.addView(mitName);
 
         if (heroExpanded && !TextUtils.isEmpty(mit.notes)) {
-            heroFg.addView(text(mit.notes, 13, 500, palette.heroSub), matchWrap(0, 8, 0, 0));
+            TextView notes = text(mit.notes, 13, 500, palette.heroSub);
+            notes.setMaxLines(6);
+            notes.setEllipsize(TextUtils.TruncateAt.END);
+            heroFg.addView(notes, matchWrap(0, 8, 0, 0));
         }
 
         if (mit.reminderAt > 0) {
@@ -862,7 +870,10 @@ public final class MainActivity extends Activity {
         copy.addView(name);
 
         if (rowExpanded && !TextUtils.isEmpty(task.notes)) {
-            copy.addView(text(task.notes, 13, 500, palette.sub), matchWrap(0, 7, 0, 0));
+            TextView notes = text(task.notes, 13, 500, palette.sub);
+            notes.setMaxLines(4);
+            notes.setEllipsize(TextUtils.TruncateAt.END);
+            copy.addView(notes, matchWrap(0, 7, 0, 0));
         }
 
         if (task.reminderAt > 0) {
@@ -1421,6 +1432,10 @@ public final class MainActivity extends Activity {
         if (name.equals(activeCat)) {
             activeCat = "All";
         }
+        if (sheetOpen && name.equals(draftCategory)) {
+            draftCategory = null;
+            styleListPill();
+        }
         store.saveCategories(categories);
         store.save(tasks);
         renderAll(false);
@@ -1531,23 +1546,6 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
-    private void buildListChips() {
-        if (listChipsRow == null) {
-            return;
-        }
-        listChipsRow.removeAllViews();
-        for (int i = 0; i < categories.size(); i++) {
-            String name = categories.get(i);
-            boolean selected = name.equals(draftCategory);
-            TextView chip = chipButton(name, selected, palette.accent, palette.accentInk);
-            chip.setOnClickListener(v -> {
-                draftCategory = name.equals(draftCategory) ? null : name;
-                buildListChips();
-            });
-            listChipsRow.addView(chip, wrap(0, 0, i < categories.size() - 1 ? 8 : 0, 0));
-        }
-    }
-
     private void hideCatKeyboard() {
         InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (imm != null && addCatInput != null) {
@@ -1561,6 +1559,7 @@ public final class MainActivity extends Activity {
         sheetMode = "add";
         sheetEditId = null;
         draftName = "";
+        draftNotes = "";
         draftImpact = TodoTask.LOW;
         draftEffort = TodoTask.LOW;
         draftDep = "None";
@@ -1571,6 +1570,7 @@ public final class MainActivity extends Activity {
         draftRepeatEvery = 1;
         draftCategory = "All".equals(activeCat) ? null : activeCat;
         detailsExpanded = false;
+        notesExpanded = false;
         openSheetWithFabTransition();
     }
 
@@ -1582,6 +1582,7 @@ public final class MainActivity extends Activity {
         sheetMode = "edit";
         sheetEditId = id;
         draftName = task.title;
+        draftNotes = task.notes;
         draftImpact = task.impact;
         draftEffort = task.effort;
         draftDep = task.dependency;
@@ -1591,7 +1592,8 @@ public final class MainActivity extends Activity {
         draftRepeatUnit = task.reminderRepeatUnit;
         draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
         draftCategory = task.category;
-        detailsExpanded = true;
+        detailsExpanded = false;
+        notesExpanded = shouldExpandNotes(sheetMode, draftNotes);
         presentSheet();
     }
 
@@ -1704,14 +1706,30 @@ public final class MainActivity extends Activity {
         gripParams.bottomMargin = dp(14);
         content.addView(grip, gripParams);
 
+        LinearLayout titleRow = horizontal();
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 17, 800, palette.ink);
-        content.addView(title, matchWrap(0, 0, 0, 13));
+        titleRow.addView(title, weight(1, 0, 0, 12, 0));
+        listPill = null;
+        if (!categories.isEmpty()) {
+            listPill = text("", 12, 700, palette.sub);
+            listPill.setGravity(Gravity.CENTER);
+            listPill.setSingleLine(true);
+            listPill.setMaxWidth(dp(120));
+            listPill.setEllipsize(TextUtils.TruncateAt.END);
+            listPill.setPadding(dp(12), dp(8), dp(12), dp(8));
+            listPill.setOnClickListener(v -> showListPicker());
+            titleRow.addView(listPill, wrap(0, 0, 0, 0));
+        }
+        content.addView(titleRow, matchWrap(0, 0, 0, 13));
 
         sheetInput = new EditText(this);
+        sheetInput.setId(View.generateViewId());
         sheetInput.setHint("What needs doing?");
         sheetInput.setText(draftName);
+        sheetInput.setSelection(sheetInput.length());
         sheetInput.setSingleLine(true);
-        sheetInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        sheetInput.setImeOptions(notesExpanded ? EditorInfo.IME_ACTION_NEXT : EditorInfo.IME_ACTION_DONE);
         sheetInput.setTextSize(16);
         sheetInput.setTextColor(palette.ink);
         sheetInput.setHintTextColor(palette.sub);
@@ -1730,6 +1748,11 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable s) { }
         });
         sheetInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_NEXT && notesExpanded && notesInput != null) {
+                notesInput.requestFocus();
+                keepFocusedSheetFieldVisible();
+                return true;
+            }
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 if (draftName.trim().length() > 0) {
                     commitSheet();
@@ -1739,6 +1762,44 @@ public final class MainActivity extends Activity {
             return false;
         });
         content.addView(sheetInput, matchWrap(0, 0, 0, 0));
+        if (listPill != null) {
+            listPill.setAccessibilityTraversalAfter(sheetInput.getId());
+        }
+
+        addDetailsRow = text("＋  Add details", 13, 700, palette.sub);
+        addDetailsRow.setGravity(Gravity.CENTER_VERTICAL);
+        addDetailsRow.setMinHeight(dp(48));
+        addDetailsRow.setPadding(dp(15), 0, dp(15), 0);
+        addDetailsRow.setContentDescription("Add task details");
+        addDetailsRow.setOnClickListener(v -> expandNotesEditor());
+        addDetailsRow.setVisibility(notesExpanded ? View.GONE : View.VISIBLE);
+        content.addView(addDetailsRow, matchWrap(0, 4, 0, 0));
+
+        notesInput = new EditText(this);
+        notesInput.setHint("Details, links, steps…");
+        notesInput.setText(draftNotes);
+        notesInput.setSingleLine(false);
+        notesInput.setMinLines(2);
+        notesInput.setGravity(Gravity.TOP | Gravity.START);
+        notesInput.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        notesInput.setImeOptions(EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_ENTER_ACTION);
+        notesInput.setTextSize(14);
+        notesInput.setTextColor(palette.ink);
+        notesInput.setHintTextColor(palette.sub);
+        notesInput.setPadding(dp(15), dp(8), dp(15), dp(12));
+        notesInput.setBackgroundTintList(ColorStateList.valueOf(palette.line));
+        notesInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                draftNotes = s.toString();
+                keepNotesCaretVisible();
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        notesInput.setVisibility(notesExpanded ? View.VISIBLE : View.GONE);
+        content.addView(notesInput, matchWrap(0, 0, 0, 0));
 
         LinearLayout reminderRow = horizontal();
         remindChip = text("", 13, 700, palette.sub);
@@ -1765,13 +1826,6 @@ public final class MainActivity extends Activity {
 
         reminderRepeatRow = horizontal();
         content.addView(reminderRepeatRow, matchWrap(0, 8, 0, 0));
-
-        if (!categories.isEmpty()) {
-            content.addView(chipGroupLabel("LIST"), matchWrap(0, 14, 0, 8));
-            listChipsRow = horizontal();
-            buildListChips();
-            content.addView(listChipsRow, matchWrap(0, 0, 0, 0));
-        }
 
         detailsToggle = text("", 12, 800, palette.accentInk);
         LinearLayout toggleRow = horizontal();
@@ -1825,6 +1879,72 @@ public final class MainActivity extends Activity {
         return actions;
     }
 
+    private void expandNotesEditor() {
+        if (notesExpanded || notesInput == null) {
+            return;
+        }
+        notesExpanded = true;
+        if (addDetailsRow != null) {
+            addDetailsRow.setVisibility(View.GONE);
+        }
+        notesInput.setVisibility(View.VISIBLE);
+        sheetInput.setImeOptions(EditorInfo.IME_ACTION_NEXT);
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.restartInput(sheetInput);
+        }
+        notesInput.requestFocus();
+        notesInput.setSelection(notesInput.length());
+        notesInput.post(() -> {
+            if (imm != null) {
+                imm.showSoftInput(notesInput, InputMethodManager.SHOW_IMPLICIT);
+            }
+            keepFocusedSheetFieldVisible();
+        });
+    }
+
+    private void showListPicker() {
+        if (listPill == null || categories.isEmpty()) {
+            return;
+        }
+        String[] choices = new String[categories.size() + 1];
+        choices[0] = "No list";
+        int checked = 0;
+        for (int i = 0; i < categories.size(); i++) {
+            choices[i + 1] = categories.get(i);
+            if (categories.get(i).equals(draftCategory)) {
+                checked = i + 1;
+            }
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Move to list")
+                .setSingleChoiceItems(choices, checked, (dialog, which) -> {
+                    draftCategory = which == 0 ? null : categories.get(which - 1);
+                    styleListPill();
+                    String destination = listPillLabel(draftCategory);
+                    listPill.announceForAccessibility("Moved to " + destination);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void styleListPill() {
+        if (listPill == null) {
+            return;
+        }
+        String label = listPillLabel(draftCategory);
+        boolean assigned = draftCategory != null && !draftCategory.trim().isEmpty();
+        listPill.setText(label + "  ▾");
+        listPill.setTextColor(assigned ? palette.accent : palette.sub);
+        listPill.setContentDescription("List: " + label + ". Double tap to change.");
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.bg);
+        bg.setCornerRadius(dp(999));
+        bg.setStroke(dp(2), assigned ? palette.accent : palette.line);
+        listPill.setBackground(bg);
+    }
+
     private void updateSheetDynamic() {
         List<String> parts = new ArrayList<>();
         parts.add(impactLabel(draftImpact) + " impact");
@@ -1841,6 +1961,7 @@ public final class MainActivity extends Activity {
         detailsSummary.setText("Assumed: " + TextUtils.join("  ·  ", parts));
         detailsToggle.setText(detailsExpanded ? "Done" : "Adjust");
         styleAdjustButton();
+        styleListPill();
 
         boolean hasReminder = draftReminderAt > 0;
         remindChip.setText(hasReminder ? "⏰  " + reminderShortFromMillis(draftReminderAt) : "⏰  Add reminder");
@@ -1894,7 +2015,11 @@ public final class MainActivity extends Activity {
             bg.setStroke(dp(2), PriorityPalette.withAlpha(0xFFFFFFFF, 0x99));
             detailsToggle.setShadowLayer(dp(4), 0, 0, PriorityPalette.withAlpha(palette.accent, 0xAA));
             detailsToggle.setElevation(dp(4));
-            startAdjustPulse();
+            if ("add".equals(sheetMode)) {
+                startAdjustPulse();
+            } else {
+                stopAdjustPulse();
+            }
         }
         detailsToggle.setBackground(bg);
     }
@@ -2166,6 +2291,7 @@ public final class MainActivity extends Activity {
             }
         }
         task.title = name;
+        task.notes = normalizeNotes(draftNotes);
         task.impact = draftImpact;
         task.effort = draftEffort;
         task.dependency = draftDep;
@@ -2355,9 +2481,38 @@ public final class MainActivity extends Activity {
         if (sheetPanel instanceof KeyboardAwareSheetPanel) {
             ((KeyboardAwareSheetPanel) sheetPanel).setMaxHeightPx(frame.maxHeightPx);
         }
-        if (sheetScroll != null && sheetInput != null) {
-            sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, sheetInput.getTop()));
+        keepFocusedSheetFieldVisible();
+    }
+
+    private void keepFocusedSheetFieldVisible() {
+        if (sheetScroll == null || sheetInput == null) {
+            return;
         }
+        View focused = sheetPanel == null ? null : sheetPanel.findFocus();
+        if (focused == notesInput) {
+            keepNotesCaretVisible();
+            return;
+        }
+        View target = sheetInput;
+        sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, Math.max(0, target.getTop() - dp(12))));
+    }
+
+    private void keepNotesCaretVisible() {
+        if (notesInput == null || !notesInput.hasFocus()) {
+            return;
+        }
+        notesInput.post(() -> {
+            android.text.Layout layout = notesInput.getLayout();
+            int offset = notesInput.getSelectionStart();
+            if (layout == null || offset < 0) {
+                return;
+            }
+            int line = layout.getLineForOffset(offset);
+            int paddingTop = notesInput.getTotalPaddingTop();
+            Rect caret = new Rect(0, layout.getLineTop(line) + paddingTop, notesInput.getWidth(),
+                    layout.getLineBottom(line) + paddingTop);
+            notesInput.requestRectangleOnScreen(caret, false);
+        });
     }
 
     static SheetKeyboardFrame sheetKeyboardFrame(
@@ -2375,6 +2530,18 @@ public final class MainActivity extends Activity {
             maxHeight = Math.max(0, fallbackHeightPx);
         }
         return new SheetKeyboardFrame(bottomMargin, maxHeight);
+    }
+
+    static String normalizeNotes(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    static boolean shouldExpandNotes(String mode, String value) {
+        return "edit".equals(mode) && !normalizeNotes(value).isEmpty();
+    }
+
+    static String listPillLabel(String category) {
+        return category == null || category.trim().isEmpty() ? "No list" : category;
     }
 
     static final class SheetKeyboardFrame {

@@ -1,6 +1,7 @@
 package com.tj90.prioritytodo;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -145,11 +146,33 @@ public final class TodoTaskTest {
     }
 
     @Test
+    public void taskDetailsNormalizeWithoutLosingInternalLineBreaks() {
+        assertEquals("", MainActivity.normalizeNotes(null));
+        assertEquals("", MainActivity.normalizeNotes("   \n  "));
+        assertEquals("First step\nSecond step",
+                MainActivity.normalizeNotes("  First step\nSecond step  "));
+    }
+
+    @Test
+    public void existingDetailsExpandOnlyWhenEditingTaskThatHasThem() {
+        assertFalse(MainActivity.shouldExpandNotes("add", "Reference"));
+        assertFalse(MainActivity.shouldExpandNotes("edit", "  "));
+        assertTrue(MainActivity.shouldExpandNotes("edit", "Reference"));
+    }
+
+    @Test
+    public void listPickerLabelHandlesAssignedAndUnassignedTasks() {
+        assertEquals("No list", MainActivity.listPillLabel(null));
+        assertEquals("No list", MainActivity.listPillLabel("  "));
+        assertEquals("EdMe", MainActivity.listPillLabel("EdMe"));
+    }
+
+    @Test
     public void csvRoundTripPreservesEditableTaskFields() {
         TodoTask task = new TodoTask();
         task.id = "task-1";
         task.title = "Call, email \"Sam\"";
-        task.notes = "Follow up on price";
+        task.notes = "Follow up on price\nAttach signed sheet";
         task.completed = true;
         task.impact = TodoTask.MEDIUM;
         task.effort = TodoTask.LOW;
@@ -170,7 +193,7 @@ public final class TodoTaskTest {
         TodoTask copy = restored.get(0);
         assertEquals("task-1", copy.id);
         assertEquals("Call, email \"Sam\"", copy.title);
-        assertEquals("Follow up on price", copy.notes);
+        assertEquals("Follow up on price\nAttach signed sheet", copy.notes);
         assertTrue(copy.completed);
         assertEquals(TodoTask.MEDIUM, copy.impact);
         assertEquals(TodoTask.LOW, copy.effort);
