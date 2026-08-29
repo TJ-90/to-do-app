@@ -99,6 +99,7 @@ public final class TodoTaskTest {
     }
 
     @Test
+    public void equalReturnOnEffortUsesImpactRankAsTieBreaker() {
         assertTrue(score(TodoTask.LOW, TodoTask.LOW, false, false)
                 < score(TodoTask.MEDIUM, TodoTask.MEDIUM, false, false));
         assertTrue(score(TodoTask.MEDIUM, TodoTask.MEDIUM, false, false)
