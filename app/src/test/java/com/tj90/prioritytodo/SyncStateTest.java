@@ -207,6 +207,7 @@ public final class SyncStateTest {
         TodoTask task = new TodoTask();
         task.id = id;
         task.title = title;
+        task.createdAt = updatedAt;
         task.updatedAt = updatedAt;
         return task;
     }
