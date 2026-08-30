@@ -303,7 +303,8 @@ endpoint = next((node for node in root.iter("node")
                  if node.attrib.get("class") == "android.widget.EditText"), None)
 if endpoint is None or endpoint.attrib.get("text") != "http://10.0.2.2:8787":
     raise AssertionError(f"Sync endpoint was not prefilled correctly: {None if endpoint is None else endpoint.attrib.get('text')!r}")
-save = next((node for node in root.iter("node") if node.attrib.get("text") == "Save"), None)
+save = next((node for node in root.iter("node")
+             if node.attrib.get("text", "").upper() == "SAVE"), None)
 if save is None:
     raise AssertionError("Sync setup dialog did not expose Save")
 x1, y1, x2, y2 = map(int, re.findall(r"\d+", save.attrib["bounds"]))
