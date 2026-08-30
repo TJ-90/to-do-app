@@ -4,6 +4,98 @@ set -eu
 SCREENSHOT_DIR="app/build/verification-screenshots"
 mkdir -p "$SCREENSHOT_DIR"
 
+WEB_SERVER_PID=""
+cleanup_web_server() {
+  if [ -n "$WEB_SERVER_PID" ]; then
+    kill "$WEB_SERVER_PID" 2>/dev/null || true
+    wait "$WEB_SERVER_PID" 2>/dev/null || true
+    WEB_SERVER_PID=""
+  fi
+}
+trap cleanup_web_server EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+rm -f web/.data/sync-state.json
+node web/server.js > "$SCREENSHOT_DIR/web-server.log" 2>&1 &
+WEB_SERVER_PID=$!
+
+server_ready=0
+for attempt in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8787/api/health > "$SCREENSHOT_DIR/web-health.json"; then
+    server_ready=1
+    break
+  fi
+  if ! kill -0 "$WEB_SERVER_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if [ "$server_ready" != 1 ]; then
+  echo "Local web server did not become healthy" >&2
+  tail -n 100 "$SCREENSHOT_DIR/web-server.log" >&2 || true
+  exit 1
+fi
+
+wait_for_server_task() {
+  expected_title="$1"
+  output_file="$2"
+  python3 - "$expected_title" "$output_file" <<'PY'
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+expected_title, output_file = sys.argv[1:]
+last_error = None
+for _ in range(30):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8787/api/state", timeout=2) as response:
+            body = response.read().decode("utf-8")
+        state = json.loads(body)
+        with open(output_file, "w", encoding="utf-8") as destination:
+            json.dump(state, destination, indent=2)
+            destination.write("\n")
+        if any(task.get("title") == expected_title for task in state.get("tasks", [])):
+            raise SystemExit(0)
+        last_error = f"task {expected_title!r} was absent"
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        last_error = str(error)
+    time.sleep(1)
+raise AssertionError(f"Timed out waiting for server task {expected_title!r}: {last_error}")
+PY
+}
+
+tap_ui_label() {
+  remote_dump="$1"
+  local_dump="$2"
+  label="$3"
+  adb shell uiautomator dump "$remote_dump" >/dev/null
+  adb pull "$remote_dump" "$local_dump" >/dev/null
+  python3 - "$local_dump" "$label" "$SCREENSHOT_DIR/ui-target-center.txt" <<'PY'
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+dump_file, label, output_file = sys.argv[1:]
+root = ET.parse(dump_file).getroot()
+node = next((item for item in root.iter("node")
+             if label in {item.attrib.get("text", ""), item.attrib.get("content-desc", "")}), None)
+if node is None:
+    visible = sorted({value for item in root.iter("node")
+                      for value in (item.attrib.get("text", ""), item.attrib.get("content-desc", ""))
+                      if value})
+    raise AssertionError(f"Could not find UI label {label!r}; visible labels: {visible!r}")
+x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.attrib["bounds"]))
+with open(output_file, "w", encoding="utf-8") as destination:
+    destination.write(f"{(x1 + x2) // 2} {(y1 + y2) // 2}\n")
+PY
+  read target_x target_y < "$SCREENSHOT_DIR/ui-target-center.txt"
+  adb shell input tap "$target_x" "$target_y"
+}
+
 adb wait-for-device
 until adb shell service check package | grep -q found; do
   sleep 5
@@ -21,6 +113,18 @@ for attempt in 1 2 3; do
   sleep 10
 done
 test "$install_ok" = 1
+
+cat > /tmp/priority-todo-legacy-prefs.xml <<'EOF'
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="tasks">[{&quot;id&quot;:&quot;ci-legacy-task&quot;,&quot;title&quot;:&quot;Legacy_low_priority_task&quot;,&quot;notes&quot;:&quot;Migration fixture&quot;,&quot;impact&quot;:&quot;L&quot;,&quot;effort&quot;:&quot;H&quot;,&quot;dependency&quot;:&quot;None&quot;,&quot;category&quot;:&quot;Legacy_list&quot;,&quot;urgent&quot;:false,&quot;quickTask&quot;:false,&quot;snoozed&quot;:false,&quot;recurringMit&quot;:false,&quot;completed&quot;:false,&quot;createdAt&quot;:1700000000000,&quot;updatedAt&quot;:1700000000000,&quot;reminderAt&quot;:0,&quot;reminderRepeatUnit&quot;:&quot;none&quot;,&quot;reminderRepeatEvery&quot;:1}]</string>
+    <string name="categories">[&quot;Legacy_list&quot;]</string>
+</map>
+EOF
+adb shell run-as com.tj90.prioritytodo mkdir -p shared_prefs
+adb shell "run-as com.tj90.prioritytodo sh -c 'cat > shared_prefs/priority_todo_store.xml'" \
+  < /tmp/priority-todo-legacy-prefs.xml
+adb shell run-as com.tj90.prioritytodo chmod 600 shared_prefs/priority_todo_store.xml
 
 adb shell settings put system font_scale 1.3
 adb shell wm size 720x1280
@@ -90,6 +194,139 @@ PY
     ;;
   *) exit 1 ;;
 esac
+
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
+labels = {value for node in root.iter("node")
+          for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
+          if value}
+for expected in ("Legacy_low_priority_task", "Legacy_list"):
+    if expected not in labels:
+        raise AssertionError(f"Legacy migration did not render {expected!r}; found {sorted(labels)!r}")
+PY
+
+migration_written=0
+for attempt in $(seq 1 10); do
+  if adb shell run-as com.tj90.prioritytodo cat shared_prefs/priority_todo_store.xml \
+      | grep -q 'category_states_v1'; then
+    migration_written=1
+    break
+  fi
+  sleep 1
+done
+if [ "$migration_written" != 1 ]; then
+  echo "Legacy category migration was not persisted before restart" >&2
+  exit 1
+fi
+
+adb shell am force-stop com.tj90.prioritytodo
+adb shell am start -W -n com.tj90.prioritytodo/.MainActivity >/dev/null
+sleep 2
+adb shell uiautomator dump /sdcard/window-migration-restart.xml >/dev/null
+adb pull /sdcard/window-migration-restart.xml "$SCREENSHOT_DIR/window-migration-restart.xml" >/dev/null
+adb shell run-as com.tj90.prioritytodo cat shared_prefs/priority_todo_store.xml \
+  > "$SCREENSHOT_DIR/migrated-shared-prefs.xml"
+
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-migration-restart.xml").getroot()
+labels = {value for node in root.iter("node")
+          for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
+          if value}
+for expected in ("Legacy_low_priority_task", "Legacy_list"):
+    if expected not in labels:
+        raise AssertionError(f"Migrated value disappeared after restart: {expected!r}")
+
+prefs = ET.parse(f"{SCREENSHOT_DIR}/migrated-shared-prefs.xml").getroot()
+if not any(node.attrib.get("name") == "category_states_v1" for node in prefs):
+    raise AssertionError("Legacy list migration did not persist category_states_v1")
+PY
+
+# Verify the overflow exposes sync setup and manual sync, then configure the emulator endpoint.
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def center(bounds):
+    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
+more = next(node for node in root.iter("node")
+            if node.attrib.get("content-desc") == "More options")
+x, y = center(more.attrib["bounds"])
+with open(f"{SCREENSHOT_DIR}/more-options-center.txt", "w") as f:
+    f.write(f"{x} {y}\n")
+PY
+
+read more_x more_y < "$SCREENSHOT_DIR/more-options-center.txt"
+adb shell input tap "$more_x" "$more_y"
+sleep 1
+adb shell uiautomator dump /sdcard/window-overflow.xml
+adb pull /sdcard/window-overflow.xml "$SCREENSHOT_DIR/window-overflow.xml"
+
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-overflow.xml").getroot()
+labels = {
+    value
+    for node in root.iter("node")
+    for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
+    if value
+}
+for expected in ("Sync with web", "Sync now"):
+    if expected not in labels:
+        raise AssertionError(f"Overflow missing {expected!r}; found {sorted(labels)!r}")
+PY
+
+tap_ui_label /sdcard/window-overflow.xml "$SCREENSHOT_DIR/window-overflow.xml" "Sync with web"
+sleep 1
+adb shell uiautomator dump /sdcard/window-sync-setup.xml >/dev/null
+adb pull /sdcard/window-sync-setup.xml "$SCREENSHOT_DIR/window-sync-setup.xml" >/dev/null
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-sync-setup.xml").getroot()
+endpoint = next((node for node in root.iter("node")
+                 if node.attrib.get("class") == "android.widget.EditText"), None)
+if endpoint is None or endpoint.attrib.get("text") != "http://10.0.2.2:8787":
+    raise AssertionError(f"Sync endpoint was not prefilled correctly: {None if endpoint is None else endpoint.attrib.get('text')!r}")
+save = next((node for node in root.iter("node") if node.attrib.get("text") == "Save"), None)
+if save is None:
+    raise AssertionError("Sync setup dialog did not expose Save")
+x1, y1, x2, y2 = map(int, re.findall(r"\d+", save.attrib["bounds"]))
+with open(f"{SCREENSHOT_DIR}/sync-save-center.txt", "w", encoding="utf-8") as destination:
+    destination.write(f"{(x1 + x2) // 2} {(y1 + y2) // 2}\n")
+PY
+
+read sync_save_x sync_save_y < "$SCREENSHOT_DIR/sync-save-center.txt"
+adb shell input tap "$sync_save_x" "$sync_save_y"
+wait_for_server_task "Legacy_low_priority_task" "$SCREENSHOT_DIR/server-state-after-legacy-sync.json"
+
+python3 - <<'PY'
+import json
+
+with open("app/build/verification-screenshots/server-state-after-legacy-sync.json", encoding="utf-8") as source:
+    state = json.load(source)
+legacy = next((task for task in state["tasks"] if task.get("id") == "ci-legacy-task"), None)
+if legacy is None or legacy.get("title") != "Legacy_low_priority_task" or legacy.get("category") != "Legacy_list":
+    raise AssertionError(f"GET /api/state did not contain the migrated legacy task: {legacy!r}")
+category = next((value for value in state["categories"] if value.get("name") == "Legacy_list"), None)
+if category is None or category.get("updatedAt", 0) <= category.get("deletedAt", 0):
+    raise AssertionError(f"GET /api/state did not contain the active migrated list: {category!r}")
+PY
 
 read add_x add_y < "$SCREENSHOT_DIR/add-affordance-center.txt"
 adb shell input tap "$add_x" "$add_y"
@@ -334,6 +571,23 @@ adb exec-out screencap -p > "$SCREENSHOT_DIR/03-after-add.png"
 adb shell uiautomator dump /sdcard/window-after-add.xml
 adb pull /sdcard/window-after-add.xml "$SCREENSHOT_DIR/window-after-add.xml"
 
+wait_for_server_task "CI_task_with_a_long_title_that_should_wrap_fully" \
+  "$SCREENSHOT_DIR/server-state-after-android-add.json"
+
+python3 - <<'PY'
+import json
+
+with open("app/build/verification-screenshots/server-state-after-android-add.json", encoding="utf-8") as source:
+    state = json.load(source)
+matches = [task for task in state["tasks"]
+           if task.get("title") == "CI_task_with_a_long_title_that_should_wrap_fully"]
+if len(matches) != 1:
+    raise AssertionError(f"Expected one exact Android-created task, found {len(matches)}")
+task = matches[0]
+if task.get("notes") != "Reference_line_one\nReference_line_two" or task.get("category") != "Work":
+    raise AssertionError(f"Android-created task reached /api/state with unexpected data: {task!r}")
+PY
+
 python3 - <<'PY'
 import re
 import xml.etree.ElementTree as ET
@@ -557,6 +811,82 @@ sleep 1
 adb exec-out screencap -p > "$SCREENSHOT_DIR/04-after-checkbox-complete.png"
 adb shell uiautomator dump /sdcard/window-after-checkbox-complete.xml
 adb pull /sdcard/window-after-checkbox-complete.xml "$SCREENSHOT_DIR/window-after-checkbox-complete.xml"
+
+cat > "$SCREENSHOT_DIR/web-sync-request.json" <<'EOF'
+{
+  "tasks": [
+    {
+      "id": "ci-web-synced-task",
+      "title": "Web_synced_task",
+      "notes": "Created by the localhost smoke test",
+      "impact": "H",
+      "effort": "H",
+      "dependency": "None",
+      "category": null,
+      "urgent": false,
+      "quickTask": false,
+      "snoozed": false,
+      "recurringMit": false,
+      "completed": false,
+      "createdAt": 2000000000000,
+      "updatedAt": 2000000000000,
+      "reminderAt": 0,
+      "reminderRepeatUnit": "none",
+      "reminderRepeatEvery": 1
+    }
+  ],
+  "taskTombstones": [],
+  "categories": []
+}
+EOF
+curl -fsS -H 'Content-Type: application/json' \
+  --data-binary @"$SCREENSHOT_DIR/web-sync-request.json" \
+  http://127.0.0.1:8787/api/sync > "$SCREENSHOT_DIR/server-state-after-web-post.json"
+
+python3 - <<'PY'
+import json
+
+directory = "app/build/verification-screenshots"
+with open(f"{directory}/web-sync-request.json", encoding="utf-8") as source:
+    expected = json.load(source)["tasks"][0]
+with open(f"{directory}/server-state-after-web-post.json", encoding="utf-8") as source:
+    state = json.load(source)
+actual = next((task for task in state["tasks"] if task.get("id") == expected["id"]), None)
+if actual != expected:
+    raise AssertionError(f"Server did not preserve the exact web task schema/timestamps: {actual!r}")
+PY
+
+tap_ui_label /sdcard/window-before-manual-sync.xml \
+  "$SCREENSHOT_DIR/window-before-manual-sync.xml" "More options"
+sleep 1
+tap_ui_label /sdcard/window-manual-sync-menu.xml \
+  "$SCREENSHOT_DIR/window-manual-sync-menu.xml" "Sync now"
+
+android_sync_visible=0
+for attempt in $(seq 1 30); do
+  sleep 1
+  adb shell uiautomator dump /sdcard/window-after-web-sync.xml >/dev/null
+  adb pull /sdcard/window-after-web-sync.xml "$SCREENSHOT_DIR/window-after-web-sync.xml" >/dev/null
+  if python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+root = ET.parse("app/build/verification-screenshots/window-after-web-sync.xml").getroot()
+labels = {value for node in root.iter("node")
+          for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
+          if value}
+raise SystemExit(0 if "Web_synced_task" in labels else 1)
+PY
+  then
+    android_sync_visible=1
+    break
+  fi
+done
+if [ "$android_sync_visible" != 1 ]; then
+  echo "Web_synced_task did not appear in Android after manual sync" >&2
+  tail -n 100 "$SCREENSHOT_DIR/web-server.log" >&2 || true
+  exit 1
+fi
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05-after-web-sync.png"
 
 adb shell settings put system font_scale 1.0 || true
 adb shell wm size reset || true

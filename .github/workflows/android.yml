@@ -18,6 +18,15 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test localhost web sync
+        working-directory: web
+        run: npm test
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -54,6 +63,11 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Set up JDK
         uses: actions/setup-java@v4
