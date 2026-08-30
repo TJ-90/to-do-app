@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f3ee">
+    <title>Priority Todo</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="today-label"></p>
+          <h1>Today</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="sync-status" class="sync-status" aria-live="polite">Connecting…</span>
+          <label class="theme-control">
+            <span class="sr-only">Theme</span>
+            <select id="theme-select" aria-label="Theme">
+              <option value="auto">Auto</option>
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <nav class="list-tabs" id="list-tabs" aria-label="Task lists"></nav>
+
+      <section class="focus-card" id="focus-card" hidden>
+        <span class="focus-kicker">MOST IMPORTANT</span>
+        <h2 id="focus-title"></h2>
+        <p id="focus-notes"></p>
+      </section>
+
+      <section aria-labelledby="active-heading">
+        <div class="section-heading">
+          <h2 id="active-heading">Up next</h2>
+          <button class="text-button" id="manage-lists" type="button">Manage lists</button>
+        </div>
+        <div id="active-tasks" class="task-list"></div>
+        <p id="empty-state" class="empty-state" hidden>Nothing waiting. Add the next thing that matters.</p>
+      </section>
+
+      <details class="later-section" id="later-section">
+        <summary><span>Later</span><span id="later-count"></span></summary>
+        <div id="later-tasks" class="task-list compact"></div>
+      </details>
+
+      <details class="later-section" id="completed-section">
+        <summary><span>Completed</span><span id="completed-count"></span></summary>
+        <div id="completed-tasks" class="task-list compact"></div>
+      </details>
+
+      <button class="fab" id="add-task" type="button" aria-label="Add task">+</button>
+    </main>
+
+    <dialog id="task-dialog" class="sheet">
+      <form id="task-form" method="dialog">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-header">
+          <div>
+            <p class="eyebrow" id="form-mode">NEW TASK</p>
+            <h2 id="form-title">What needs doing?</h2>
+          </div>
+          <label class="list-picker">
+            <span class="sr-only">List</span>
+            <select id="task-category" name="category" aria-label="List"></select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Task</span>
+          <input id="task-title" name="title" required maxlength="180" autocomplete="off" placeholder="Write a clear next action">
+        </label>
+        <button class="details-toggle" id="details-toggle" type="button">Add details</button>
+        <label class="field" id="notes-field" hidden>
+          <span>Notes</span>
+          <textarea id="task-notes" name="notes" rows="3" maxlength="2000" placeholder="Reference notes, links, or context"></textarea>
+        </label>
+
+        <fieldset class="choice-group">
+          <legend>Impact</legend>
+          <div class="segmented">
+            <label><input type="radio" name="impact" value="H" checked><span>High</span></label>
+            <label><input type="radio" name="impact" value="M"><span>Medium</span></label>
+            <label><input type="radio" name="impact" value="L"><span>Low</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="choice-group">
+          <legend>Effort</legend>
+          <div class="segmented">
+            <label><input type="radio" name="effort" value="L"><span>Low</span></label>
+            <label><input type="radio" name="effort" value="M" checked><span>Medium</span></label>
+            <label><input type="radio" name="effort" value="H"><span>High</span></label>
+          </div>
+        </fieldset>
+
+        <div class="flag-row">
+          <label class="flag"><input id="task-urgent" type="checkbox"><span>Urgent</span></label>
+          <label class="flag"><input id="task-quick" type="checkbox"><span>Quick win</span></label>
+        </div>
+
+        <div class="sheet-actions">
+          <button class="button secondary" id="cancel-task" type="button">Cancel</button>
+          <button class="button primary" type="submit">Save task</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="lists-dialog" class="sheet small-sheet">
+      <form method="dialog" id="lists-form">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-header">
+          <div><p class="eyebrow">ORGANIZE</p><h2>Lists</h2></div>
+        </div>
+        <div class="inline-create">
+          <label class="field"><span>New list</span><input id="new-list" maxlength="60" placeholder="e.g. Work"></label>
+          <button class="button primary" id="create-list" type="button">Add</button>
+        </div>
+        <div id="list-manager" class="list-manager"></div>
+        <div class="sheet-actions"><button class="button secondary" value="close">Done</button></div>
+      </form>
+    </dialog>
+
+    <template id="task-template">
+      <article class="task-row">
+        <button class="complete-button" type="button" aria-label="Complete task"></button>
+        <button class="task-main" type="button">
+          <span class="task-title"></span>
+          <span class="task-meta"></span>
+          <span class="task-notes"></span>
+        </button>
+        <div class="row-actions">
+          <button class="later-button" type="button"></button>
+          <button class="delete-button" type="button" aria-label="Delete task">×</button>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
