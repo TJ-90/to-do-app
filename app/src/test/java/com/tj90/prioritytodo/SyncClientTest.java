@@ -1,7 +1,9 @@
 package com.tj90.prioritytodo;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
@@ -23,38 +25,72 @@ public final class SyncClientTest {
     public void syncPostsJsonToApiPathAndDecodesSuccess() throws Exception {
         AtomicReference<CapturedRequest> captured = new AtomicReference<>();
         try (LoopbackServer server = new LoopbackServer(200, EMPTY_STATE, captured)) {
-            SyncState response = SyncClient.sync(server.baseUrl(), "{\"client\":\"android\"}");
+            SyncState response = SyncClient.sync(
+                    server.baseUrl(), "access-client-id", "access-client-secret",
+                    "{\"client\":\"android\"}");
 
             assertTrue(response.tasks.isEmpty());
             CapturedRequest request = server.awaitRequest();
             assertEquals("POST /api/sync HTTP/1.1", request.requestLine);
             assertEquals("application/json; charset=utf-8", request.contentType);
+            assertEquals("access-client-id", request.accessClientId);
+            assertEquals("access-client-secret", request.accessClientSecret);
             assertEquals("{\"client\":\"android\"}", request.body);
+        }
+    }
+
+    @Test
+    public void syncOmitsAccessHeadersWhenCredentialsAreBlank() throws Exception {
+        AtomicReference<CapturedRequest> captured = new AtomicReference<>();
+        try (LoopbackServer server = new LoopbackServer(200, EMPTY_STATE, captured)) {
+            SyncClient.sync(server.baseUrl(), "", "", EMPTY_STATE);
+
+            CapturedRequest request = server.awaitRequest();
+            assertNull(request.accessClientId);
+            assertNull(request.accessClientSecret);
+        }
+    }
+
+    @Test
+    public void syncRejectsCloudflareLoginRedirectWithoutFollowingIt() throws Exception {
+        try (LoopbackServer server = new LoopbackServer(302, "", new AtomicReference<>())) {
+            try {
+                SyncClient.sync(
+                        server.baseUrl(), "access-client-id", "access-client-secret", EMPTY_STATE);
+                fail("Expected the Cloudflare Access redirect to fail sync");
+            } catch (IOException exception) {
+                assertEquals("Sync server returned HTTP 302", exception.getMessage());
+            }
         }
     }
 
     @Test(expected = IOException.class)
     public void syncRejectsNonSuccessStatus() throws Exception {
         try (LoopbackServer server = new LoopbackServer(503, "unavailable", new AtomicReference<>())) {
-            SyncClient.sync(server.baseUrl(), EMPTY_STATE);
+            SyncClient.sync(server.baseUrl(), "", "", EMPTY_STATE);
         }
     }
 
     @Test(expected = IOException.class)
     public void syncRejectsSuccessMissingRequiredArrays() throws Exception {
         try (LoopbackServer server = new LoopbackServer(200, "{\"tasks\":[]}", new AtomicReference<>())) {
-            SyncClient.sync(server.baseUrl(), EMPTY_STATE);
+            SyncClient.sync(server.baseUrl(), "", "", EMPTY_STATE);
         }
     }
 
     private static final class CapturedRequest {
         final String requestLine;
         final String contentType;
+        final String accessClientId;
+        final String accessClientSecret;
         final String body;
 
-        CapturedRequest(String requestLine, String contentType, String body) {
+        CapturedRequest(String requestLine, String contentType,
+                        String accessClientId, String accessClientSecret, String body) {
             this.requestLine = requestLine;
             this.contentType = contentType;
+            this.accessClientId = accessClientId;
+            this.accessClientSecret = accessClientSecret;
             this.body = body;
         }
     }
@@ -96,6 +132,8 @@ public final class SyncClientTest {
                 String requestLine = reader.readLine();
                 int contentLength = 0;
                 String contentType = null;
+                String accessClientId = null;
+                String accessClientSecret = null;
                 String line;
                 while ((line = reader.readLine()) != null && !line.isEmpty()) {
                     int separator = line.indexOf(':');
@@ -108,6 +146,10 @@ public final class SyncClientTest {
                         contentLength = Integer.parseInt(value);
                     } else if ("Content-Type".equalsIgnoreCase(name)) {
                         contentType = value;
+                    } else if ("CF-Access-Client-Id".equalsIgnoreCase(name)) {
+                        accessClientId = value;
+                    } else if ("CF-Access-Client-Secret".equalsIgnoreCase(name)) {
+                        accessClientSecret = value;
                     }
                 }
                 char[] bodyChars = new char[contentLength];
@@ -120,12 +162,14 @@ public final class SyncClientTest {
                     offset += count;
                 }
                 captured.set(new CapturedRequest(
-                        requestLine, contentType, new String(bodyChars, 0, offset)));
+                        requestLine, contentType, accessClientId, accessClientSecret,
+                        new String(bodyChars, 0, offset)));
 
                 byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
                 OutputStream output = socket.getOutputStream();
                 output.write(("HTTP/1.1 " + status + " Test\r\n"
                         + "Content-Type: application/json\r\n"
+                        + (status == 302 ? "Location: http://127.0.0.1:1/cdn-cgi/access/login\r\n" : "")
                         + "Content-Length: " + response.length + "\r\n"
                         + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                 output.write(response);

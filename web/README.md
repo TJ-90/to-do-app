@@ -34,6 +34,15 @@ ALLOWED_HOSTS=todo-box.local,my-laptop npm start
 
 Requests carrying any other hostname are rejected to protect the unauthenticated local service from DNS-rebinding attacks.
 
+### Cloudflare Access
+
+Interactive users can protect the website with an email/OTP Access policy. The
+Android client cannot complete a browser login, so protect the more-specific
+`/api/*` Access application with both the user's email allow policy and a
+Service Auth policy. Paste that service token's Client ID and Client Secret into
+the Android sync settings. Credential-free localhost and private-LAN sync still
+work as before.
+
 Both clients send their local state to `POST /api/sync`. The response is the merged state, using `updatedAt` for task last-write-wins resolution and deletion tombstones to prevent removed tasks from returning. Older tasks without `updatedAt` use `createdAt` as their initial version timestamp.
 
 Clients should treat timestamps as a monotonic logical clock: after each response, observe the greatest `updatedAt` or `deletedAt` value and generate subsequent mutation timestamps greater than that maximum (while still using the local clock when it is ahead). The server preserves client timestamps and returns canonical state; it does not rewrite timestamps on arrival.

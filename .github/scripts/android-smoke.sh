@@ -299,8 +299,11 @@ import xml.etree.ElementTree as ET
 
 SCREENSHOT_DIR = "app/build/verification-screenshots"
 root = ET.parse(f"{SCREENSHOT_DIR}/window-sync-setup.xml").getroot()
-endpoint = next((node for node in root.iter("node")
-                 if node.attrib.get("class") == "android.widget.EditText"), None)
+edits = [node for node in root.iter("node")
+         if node.attrib.get("class") == "android.widget.EditText"]
+if len(edits) != 3:
+    raise AssertionError(f"Sync setup should expose URL, Client ID, and Client Secret; found {len(edits)} fields")
+endpoint = edits[0]
 if endpoint is None or endpoint.attrib.get("text") != "http://10.0.2.2:8787":
     raise AssertionError(f"Sync endpoint was not prefilled correctly: {None if endpoint is None else endpoint.attrib.get('text')!r}")
 save = next((node for node in root.iter("node")

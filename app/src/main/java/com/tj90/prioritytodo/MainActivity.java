@@ -74,11 +74,14 @@ import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
     private static final String UI_PREFS = "priority_todo_ui";
+    private static final String SYNC_CREDENTIAL_PREFS = "priority_todo_sync_credentials";
     private static final String LEGACY_NIGHT_MODE = "night_mode";
     private static final String KEY_THEME = "theme";
     private static final String KEY_HAND = "hand";
     private static final String KEY_ONBOARDED = "onboarded_v2";
     private static final String KEY_SYNC_BASE_URL = "sync_base_url";
+    private static final String KEY_SYNC_ACCESS_CLIENT_ID = "access_client_id";
+    private static final String KEY_SYNC_ACCESS_CLIENT_SECRET = "access_client_secret";
     private static final String DEFAULT_SYNC_BASE_URL = "http://10.0.2.2:8787";
 
     private static final String THEME_DAY = "day";
@@ -107,6 +110,8 @@ public final class MainActivity extends Activity {
     private String theme = THEME_DAY;
     private String hand = HAND_RIGHT;
     private String syncBaseUrl = "";
+    private String syncAccessClientId = "";
+    private String syncAccessClientSecret = "";
     private boolean syncInFlight;
     private boolean syncQueued;
     private boolean queuedManualSync;
@@ -250,6 +255,10 @@ public final class MainActivity extends Activity {
         }
         hand = prefs.getString(KEY_HAND, HAND_RIGHT);
         syncBaseUrl = prefs.getString(KEY_SYNC_BASE_URL, "");
+        SharedPreferences syncCredentials = getSharedPreferences(
+                SYNC_CREDENTIAL_PREFS, MODE_PRIVATE);
+        syncAccessClientId = syncCredentials.getString(KEY_SYNC_ACCESS_CLIENT_ID, "");
+        syncAccessClientSecret = syncCredentials.getString(KEY_SYNC_ACCESS_CLIENT_SECRET, "");
     }
 
     private void persistPrefs() {
@@ -466,29 +475,71 @@ public final class MainActivity extends Activity {
     }
 
     private void showSyncSetup() {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setHint(DEFAULT_SYNC_BASE_URL);
-        input.setText(syncBaseUrl.isEmpty() ? DEFAULT_SYNC_BASE_URL : syncBaseUrl);
-        input.setSelectAllOnFocus(true);
+        LinearLayout fields = vertical();
+        fields.setPadding(dp(24), 0, dp(24), 0);
+
+        EditText endpointInput = new EditText(this);
+        endpointInput.setSingleLine(true);
+        endpointInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        endpointInput.setHint("Server URL");
+        endpointInput.setText(syncBaseUrl.isEmpty() ? DEFAULT_SYNC_BASE_URL : syncBaseUrl);
+        endpointInput.setSelectAllOnFocus(true);
+        fields.addView(endpointInput, matchWrap(0, 0, 0, 8));
+
+        EditText clientIdInput = new EditText(this);
+        clientIdInput.setSingleLine(true);
+        clientIdInput.setInputType(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        clientIdInput.setHint("Cloudflare Access Client ID (optional)");
+        clientIdInput.setText(syncAccessClientId);
+        clientIdInput.setSelectAllOnFocus(true);
+        fields.addView(clientIdInput, matchWrap(0, 0, 0, 8));
+
+        EditText clientSecretInput = new EditText(this);
+        clientSecretInput.setSingleLine(true);
+        clientSecretInput.setInputType(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        clientSecretInput.setHint("Cloudflare Access Client Secret (optional)");
+        clientSecretInput.setText(syncAccessClientSecret);
+        clientSecretInput.setSelectAllOnFocus(true);
+        fields.addView(clientSecretInput, matchWrap(0, 0, 0, 0));
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Sync with web")
-                .setMessage("Use the address of the local Clearflow web server.")
-                .setView(input)
+                .setMessage("Local servers need only the URL. Cloudflare Access also needs its Client ID and Secret.")
+                .setView(fields)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", null)
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
                     try {
-                        syncBaseUrl = SyncClient.normalizeBaseUrl(input.getText().toString());
+                        String clientId = clientIdInput.getText().toString().trim();
+                        String clientSecret = clientSecretInput.getText().toString().trim();
+                        if (clientId.isEmpty() != clientSecret.isEmpty()) {
+                            if (clientId.isEmpty()) {
+                                clientIdInput.setError("Enter the Client ID too.");
+                            } else {
+                                clientSecretInput.setError("Enter the Client Secret too.");
+                            }
+                            return;
+                        }
+                        syncBaseUrl = SyncClient.normalizeBaseUrl(
+                                endpointInput.getText().toString());
+                        syncAccessClientId = clientId;
+                        syncAccessClientSecret = clientSecret;
                         persistPrefs();
-                        input.setError(null);
+                        getSharedPreferences(SYNC_CREDENTIAL_PREFS, MODE_PRIVATE).edit()
+                                .putString(KEY_SYNC_ACCESS_CLIENT_ID, syncAccessClientId)
+                                .putString(KEY_SYNC_ACCESS_CLIENT_SECRET, syncAccessClientSecret)
+                                .apply();
+                        endpointInput.setError(null);
+                        clientIdInput.setError(null);
+                        clientSecretInput.setError(null);
                         dialog.dismiss();
                         syncNow(true);
                     } catch (IllegalArgumentException exception) {
-                        input.setError(exception.getMessage());
+                        endpointInput.setError(exception.getMessage());
                     }
                 }));
         dialog.show();
@@ -542,9 +593,12 @@ public final class MainActivity extends Activity {
         }
         syncInFlight = true;
         final String baseUrl = syncBaseUrl;
+        final String accessClientId = syncAccessClientId;
+        final String accessClientSecret = syncAccessClientSecret;
         new Thread(() -> {
             try {
-                SyncState response = SyncClient.sync(baseUrl, requestJson);
+                SyncState response = SyncClient.sync(
+                        baseUrl, accessClientId, accessClientSecret, requestJson);
                 handler.post(() -> finishSyncSuccess(
                         response, requestedRevision, baseUrl, manual));
             } catch (Exception exception) {

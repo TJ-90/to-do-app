@@ -42,15 +42,22 @@ final class SyncClient {
         }
     }
 
-    static SyncState sync(String baseUrl, String requestJson) throws Exception {
+    static SyncState sync(String baseUrl, String accessClientId,
+                          String accessClientSecret, String requestJson) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(
                 normalizeBaseUrl(baseUrl) + "/api/sync").openConnection();
         connection.setRequestMethod("POST");
+        connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("Accept", "application/json");
+        if (accessClientId != null && !accessClientId.trim().isEmpty()
+                && accessClientSecret != null && !accessClientSecret.trim().isEmpty()) {
+            connection.setRequestProperty("CF-Access-Client-Id", accessClientId.trim());
+            connection.setRequestProperty("CF-Access-Client-Secret", accessClientSecret.trim());
+        }
         byte[] body = requestJson.getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(body.length);
         try {

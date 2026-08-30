@@ -67,6 +67,13 @@ available in the same menu. The app remains fully usable offline. The local
 service has no authentication or TLS, so expose it only on localhost or a
 trusted private network.
 
+When the server is protected by Cloudflare Access, the browser continues to use
+interactive email login. Android cannot complete that browser flow, so its sync
+settings also accept a Cloudflare Access Client ID and Client Secret. The app
+sends them only in the standard `CF-Access-Client-Id` and
+`CF-Access-Client-Secret` headers. Credentials are stored in the app's private
+preferences and excluded from Android backup and device transfer.
+
 ## Build
 
 The repository includes a GitHub Actions workflow that tests the web companion
