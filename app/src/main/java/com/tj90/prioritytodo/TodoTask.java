@@ -29,6 +29,7 @@ final class TodoTask {
     boolean recurringMit;
     boolean completed;
     long createdAt = System.currentTimeMillis();
+    long updatedAt = createdAt;
     long reminderAt;
     String reminderRepeatUnit = REPEAT_NONE;
     int reminderRepeatEvery = 1;
@@ -77,6 +78,7 @@ final class TodoTask {
         json.put("recurringMit", recurringMit);
         json.put("completed", completed);
         json.put("createdAt", createdAt);
+        json.put("updatedAt", updatedAt);
         json.put("reminderAt", reminderAt);
         json.put("reminderRepeatUnit", reminderRepeatUnit);
         json.put("reminderRepeatEvery", reminderRepeatEvery);
@@ -103,6 +105,7 @@ final class TodoTask {
         task.recurringMit = json.optBoolean("recurringMit", false);
         task.completed = json.optBoolean("completed", false);
         task.createdAt = json.optLong("createdAt", System.currentTimeMillis());
+        task.updatedAt = json.optLong("updatedAt", task.createdAt);
         task.reminderAt = json.optLong("reminderAt", 0);
         task.reminderRepeatUnit = normalizeRepeatUnit(json.optString("reminderRepeatUnit", REPEAT_NONE));
         task.reminderRepeatEvery = Math.max(1, json.optInt("reminderRepeatEvery", 1));

@@ -10,7 +10,7 @@ final class CsvCodec {
     private static final String[] HEADERS = {
             "id", "title", "notes", "completed", "impact", "effort", "urgent", "quickTask",
             "snoozed", "recurringMit", "category", "dependency", "reminderAt", "repeatUnit",
-            "repeatEvery", "createdAt"
+            "repeatEvery", "createdAt", "updatedAt"
     };
 
     private CsvCodec() { }
@@ -35,7 +35,8 @@ final class CsvCodec {
                     Long.toString(task.reminderAt),
                     task.reminderRepeatUnit,
                     Integer.toString(task.reminderRepeatEvery),
-                    Long.toString(task.createdAt)
+                    Long.toString(task.createdAt),
+                    Long.toString(task.updatedAt)
             });
         }
         return out.toString();
@@ -76,6 +77,7 @@ final class CsvCodec {
             task.reminderRepeatUnit = repeatUnit(value(row, columns, "repeatUnit"));
             task.reminderRepeatEvery = Math.max(1, intValue(value(row, columns, "repeatEvery"), 1));
             task.createdAt = longValue(value(row, columns, "createdAt"), System.currentTimeMillis());
+            task.updatedAt = longValue(value(row, columns, "updatedAt"), task.createdAt);
             tasks.add(task);
         }
         return tasks;

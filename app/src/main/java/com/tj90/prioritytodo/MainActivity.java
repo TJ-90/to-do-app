@@ -78,6 +78,8 @@ public final class MainActivity extends Activity {
     private static final String KEY_THEME = "theme";
     private static final String KEY_HAND = "hand";
     private static final String KEY_ONBOARDED = "onboarded_v2";
+    private static final String KEY_SYNC_BASE_URL = "sync_base_url";
+    private static final String DEFAULT_SYNC_BASE_URL = "http://10.0.2.2:8787";
 
     private static final String THEME_DAY = "day";
     private static final String THEME_NIGHT = "night";
@@ -88,7 +90,6 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_EXPORT_CSV = 21;
     private static final int REQUEST_IMPORT_CSV = 22;
 
-    private static final String[] DEPENDENCIES = {"None", "Sequential", "Reciprocal", "Pooled"};
     private static final String[] REPEAT_UNITS = {"No repeat", "Day", "Week", "Month"};
 
     private static final int[] CONFETTI_COLORS = {
@@ -96,12 +97,20 @@ public final class MainActivity extends Activity {
     };
 
     private final List<TodoTask> tasks = new ArrayList<>();
+    private final List<SyncState.TaskTombstone> taskTombstones = new ArrayList<>();
+    private final List<SyncState.CategoryState> categoryStates = new ArrayList<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable debouncedSync = () -> syncNow(false);
 
     private TaskStore store;
     private PriorityPalette palette;
     private String theme = THEME_DAY;
     private String hand = HAND_RIGHT;
+    private String syncBaseUrl = "";
+    private boolean syncInFlight;
+    private boolean syncQueued;
+    private boolean queuedManualSync;
+    private boolean destroyed;
 
     private FrameLayout root;
     private TextView headerSubView;
@@ -143,7 +152,6 @@ public final class MainActivity extends Activity {
     private String draftNotes = "";
     private String draftImpact = TodoTask.LOW;
     private String draftEffort = TodoTask.LOW;
-    private String draftDep = "None";
     private boolean draftUrgent;
     private boolean draftQuick = true;
     private long draftReminderAt;
@@ -191,14 +199,28 @@ public final class MainActivity extends Activity {
         store = new TaskStore(this);
         loadPrefs();
         palette = activePalette();
-        tasks.addAll(store.load());
-        categories.addAll(store.loadCategories());
+        replaceSyncState(store.loadSyncState());
         requestNotificationPermission();
         createNotificationChannel();
         rescheduleFutureReminders();
         buildChrome();
         renderAll(false);
         maybeShowOnboarding();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!syncBaseUrl.isEmpty()) {
+            syncNow(false);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        handler.removeCallbacks(debouncedSync);
+        super.onDestroy();
     }
 
     @Override
@@ -227,12 +249,14 @@ public final class MainActivity extends Activity {
             theme = THEME_DAY;
         }
         hand = prefs.getString(KEY_HAND, HAND_RIGHT);
+        syncBaseUrl = prefs.getString(KEY_SYNC_BASE_URL, "");
     }
 
     private void persistPrefs() {
         getSharedPreferences(UI_PREFS, MODE_PRIVATE).edit()
                 .putString(KEY_THEME, theme)
                 .putString(KEY_HAND, hand)
+                .putString(KEY_SYNC_BASE_URL, syncBaseUrl)
                 .apply();
     }
 
@@ -411,6 +435,8 @@ public final class MainActivity extends Activity {
         menu.getMenu().add(0, 1, 0, "Import CSV");
         menu.getMenu().add(0, 2, 1, "Export CSV");
         menu.getMenu().add(0, 3, 2, "How it works");
+        menu.getMenu().add(0, 4, 3, "Sync with web");
+        menu.getMenu().add(0, 5, 4, "Sync now");
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1:
@@ -422,11 +448,186 @@ public final class MainActivity extends Activity {
                 case 3:
                     showHowItWorks();
                     return true;
+                case 4:
+                    showSyncSetup();
+                    return true;
+                case 5:
+                    if (syncBaseUrl.isEmpty()) {
+                        showSyncSetup();
+                    } else {
+                        syncNow(true);
+                    }
+                    return true;
                 default:
                     return false;
             }
         });
         menu.show();
+    }
+
+    private void showSyncSetup() {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint(DEFAULT_SYNC_BASE_URL);
+        input.setText(syncBaseUrl.isEmpty() ? DEFAULT_SYNC_BASE_URL : syncBaseUrl);
+        input.setSelectAllOnFocus(true);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Sync with web")
+                .setMessage("Use the address of the local Clearflow web server.")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    try {
+                        syncBaseUrl = SyncClient.normalizeBaseUrl(input.getText().toString());
+                        persistPrefs();
+                        input.setError(null);
+                        dialog.dismiss();
+                        syncNow(true);
+                    } catch (IllegalArgumentException exception) {
+                        input.setError(exception.getMessage());
+                    }
+                }));
+        dialog.show();
+    }
+
+    private SyncState currentSyncState() {
+        return new SyncState(tasks, taskTombstones, categoryStates);
+    }
+
+    private void replaceSyncState(SyncState state) {
+        tasks.clear();
+        tasks.addAll(state.tasks);
+        taskTombstones.clear();
+        taskTombstones.addAll(state.taskTombstones);
+        categoryStates.clear();
+        categoryStates.addAll(state.categories);
+        rebuildActiveCategories();
+    }
+
+    private void persistMutation() {
+        if (destroyed) {
+            return;
+        }
+        store.saveSyncState(currentSyncState());
+        if (!syncBaseUrl.isEmpty()) {
+            handler.removeCallbacks(debouncedSync);
+            handler.postDelayed(debouncedSync, 180);
+        }
+    }
+
+    private void syncNow(boolean manual) {
+        if (destroyed || syncBaseUrl.isEmpty()) {
+            return;
+        }
+        handler.removeCallbacks(debouncedSync);
+        if (syncInFlight) {
+            syncQueued = true;
+            queuedManualSync |= manual;
+            return;
+        }
+
+        final long requestedRevision = store.revision();
+        final String requestJson;
+        try {
+            requestJson = currentSyncState().toJson().toString();
+        } catch (Exception exception) {
+            if (manual) {
+                showDataError("Sync failed", "Clearflow couldn't prepare the local data.");
+            }
+            return;
+        }
+        syncInFlight = true;
+        final String baseUrl = syncBaseUrl;
+        new Thread(() -> {
+            try {
+                SyncState response = SyncClient.sync(baseUrl, requestJson);
+                handler.post(() -> finishSyncSuccess(
+                        response, requestedRevision, baseUrl, manual));
+            } catch (Exception exception) {
+                handler.post(() -> finishSyncFailure(baseUrl, manual));
+            }
+        }, "clearflow-sync").start();
+    }
+
+    private void finishSyncSuccess(SyncState response, long requestedRevision,
+                                   String requestedBaseUrl, boolean manual) {
+        if (destroyed || isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (!requestedBaseUrl.equals(syncBaseUrl)) {
+            queueFreshEndpointSync();
+        } else if (SyncClient.responseMatchesRequest(
+                requestedRevision, store.revision(), requestedBaseUrl, syncBaseUrl)) {
+            applyAuthoritativeSyncState(response);
+            if (manual) {
+                showCheer("Synced");
+            }
+        } else {
+            syncQueued = true;
+        }
+        finishSyncAttempt();
+    }
+
+    private void finishSyncFailure(String requestedBaseUrl, boolean manual) {
+        if (destroyed || isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (!requestedBaseUrl.equals(syncBaseUrl)) {
+            queueFreshEndpointSync();
+        } else if (manual) {
+            showDataError("Sync unavailable",
+                    "Your tasks are still saved on this device. Check the web server address and try again.");
+        }
+        finishSyncAttempt();
+    }
+
+    private void finishSyncAttempt() {
+        if (destroyed) {
+            return;
+        }
+        syncInFlight = false;
+        if (syncQueued) {
+            boolean manual = queuedManualSync;
+            syncQueued = false;
+            queuedManualSync = false;
+            syncNow(manual);
+        }
+    }
+
+    private void queueFreshEndpointSync() {
+        syncQueued = true;
+        queuedManualSync = true;
+    }
+
+    private long nextMutationTimestamp() {
+        return currentSyncState().nextMutationTimestamp(System.currentTimeMillis());
+    }
+
+    private void applyAuthoritativeSyncState(SyncState state) {
+        if (currentSyncState().hasSameWireState(state)) {
+            rescheduleFutureReminders();
+            return;
+        }
+        for (TodoTask task : tasks) {
+            ReminderScheduler.cancel(this, task);
+        }
+        replaceSyncState(state);
+        if (!"All".equals(activeCat) && !categories.contains(activeCat)) {
+            activeCat = "All";
+        }
+        if (draftCategory != null && !categories.contains(draftCategory)) {
+            draftCategory = null;
+            if (sheetOpen) {
+                styleListPill();
+            }
+        }
+        store.saveSyncState(currentSyncState());
+        rescheduleFutureReminders();
+        renderAll(false);
     }
 
     private void addActZone() {
@@ -1063,8 +1264,9 @@ public final class MainActivity extends Activity {
         }
         task.completed = true;
         task.snoozed = false;
+        task.updatedAt = nextMutationTimestamp();
         ReminderScheduler.cancel(this, task);
-        store.save(tasks);
+        persistMutation();
         renderAll(true);
         showToast("Completed", "complete", id);
     }
@@ -1075,7 +1277,8 @@ public final class MainActivity extends Activity {
             return;
         }
         task.snoozed = true;
-        store.save(tasks);
+        task.updatedAt = nextMutationTimestamp();
+        persistMutation();
         renderAll(true);
         showToast("Moved to Later", "later", id);
     }
@@ -1092,7 +1295,8 @@ public final class MainActivity extends Activity {
             } else {
                 task.snoozed = false;
             }
-            store.save(tasks);
+            task.updatedAt = nextMutationTimestamp();
+            persistMutation();
             renderAll(true);
         }
         dismissToast();
@@ -1174,6 +1378,57 @@ public final class MainActivity extends Activity {
     }
 
     // ===================== lists / categories =====================
+
+    private void rebuildActiveCategories() {
+        categories.clear();
+        for (SyncState.CategoryState category : categoryStates) {
+            if (category.isActive()) {
+                categories.add(category.name);
+            }
+        }
+    }
+
+    private void upsertCategoryState(String name, long now) {
+        for (SyncState.CategoryState category : categoryStates) {
+            if (category.name.equalsIgnoreCase(name)) {
+                category.name = name;
+                category.updatedAt = now;
+                category.deletedAt = 0;
+                return;
+            }
+        }
+        categoryStates.add(new SyncState.CategoryState(name, now, 0));
+    }
+
+    private void activateCategory(String name, long now) {
+        categories.add(name);
+        upsertCategoryState(name, now);
+    }
+
+    private void deleteCategoryState(String name, long now) {
+        for (SyncState.CategoryState category : categoryStates) {
+            if (category.name.equalsIgnoreCase(name)) {
+                category.deletedAt = Math.max(category.deletedAt, now);
+                return;
+            }
+        }
+        categoryStates.add(new SyncState.CategoryState(name, 0, now));
+    }
+
+    private void deactivateCategory(String name, long now) {
+        categories.remove(name);
+        deleteCategoryState(name, now);
+    }
+
+    private void recordTaskTombstone(String id, long deletedAt) {
+        for (SyncState.TaskTombstone tombstone : taskTombstones) {
+            if (tombstone.id.equals(id)) {
+                tombstone.deletedAt = Math.max(tombstone.deletedAt, deletedAt);
+                return;
+            }
+        }
+        taskTombstones.add(new SyncState.TaskTombstone(id, deletedAt));
+    }
 
     private boolean inActiveCat(TodoTask task) {
         return "All".equals(activeCat) || activeCat.equals(task.category);
@@ -1381,8 +1636,8 @@ public final class MainActivity extends Activity {
                 return;
             }
         }
-        categories.add(name);
-        store.saveCategories(categories);
+        activateCategory(name, nextMutationTimestamp());
+        persistMutation();
         addCatDraft = null;
         switchCat(name);
         showCheer("List added");
@@ -1423,10 +1678,12 @@ public final class MainActivity extends Activity {
     }
 
     private void deleteCat(String name) {
-        categories.remove(name);
+        long now = nextMutationTimestamp();
+        deactivateCategory(name, now);
         for (TodoTask task : tasks) {
             if (name.equals(task.category)) {
                 task.category = null;
+                task.updatedAt = now;
             }
         }
         if (name.equals(activeCat)) {
@@ -1436,8 +1693,7 @@ public final class MainActivity extends Activity {
             draftCategory = null;
             styleListPill();
         }
-        store.saveCategories(categories);
-        store.save(tasks);
+        persistMutation();
         renderAll(false);
     }
 
@@ -1478,8 +1734,7 @@ public final class MainActivity extends Activity {
                 csv.append(line).append('\n');
             }
             int changed = mergeImportedTasks(CsvCodec.importTasks(csv.toString()));
-            store.save(tasks);
-            store.saveCategories(categories);
+            persistMutation();
             rescheduleFutureReminders();
             renderAll(false);
             showCheer(changed + " tasks imported");
@@ -1496,15 +1751,21 @@ public final class MainActivity extends Activity {
         int changed = 0;
         for (TodoTask imported : incoming) {
             TodoTask existing = byId.get(imported.id);
+            TodoTask target;
             if (existing == null) {
-                tasks.add(imported);
-                byId.put(imported.id, imported);
+                target = imported;
+                tasks.add(target);
+                byId.put(target.id, target);
             } else {
-                copyTask(imported, existing);
+                target = existing;
+                copyTask(imported, target);
             }
+            target.updatedAt = imported.updatedAt;
+            long now = nextMutationTimestamp();
             if (imported.category != null && !hasCategory(imported.category)) {
-                categories.add(imported.category);
+                activateCategory(imported.category, now);
             }
+            target.updatedAt = now;
             changed++;
         }
         return changed;
@@ -1562,7 +1823,6 @@ public final class MainActivity extends Activity {
         draftNotes = "";
         draftImpact = TodoTask.LOW;
         draftEffort = TodoTask.LOW;
-        draftDep = "None";
         draftUrgent = false;
         draftQuick = true;
         draftReminderAt = 0;
@@ -1585,7 +1845,6 @@ public final class MainActivity extends Activity {
         draftNotes = task.notes;
         draftImpact = task.impact;
         draftEffort = task.effort;
-        draftDep = task.dependency;
         draftUrgent = task.urgent;
         draftQuick = task.quickTask;
         draftReminderAt = task.reminderAt;
@@ -1977,8 +2236,8 @@ public final class MainActivity extends Activity {
                 return;
             }
         }
-        categories.add(name);
-        store.saveCategories(categories);
+        activateCategory(name, nextMutationTimestamp());
+        persistMutation();
         draftCategory = name;
         renderCategoryStrip();
         styleListPill();
@@ -2005,9 +2264,6 @@ public final class MainActivity extends Activity {
         List<String> parts = new ArrayList<>();
         parts.add(impactLabel(draftImpact) + " impact");
         parts.add(impactLabel(draftEffort) + " effort");
-        if (!"None".equals(draftDep)) {
-            parts.add(draftDep);
-        }
         if (draftQuick) {
             parts.add("Quick win: fast");
         }
@@ -2209,9 +2465,6 @@ public final class MainActivity extends Activity {
         container.addView(impactEffortRow("impact"), matchWrap(0, 8, 0, 15));
         container.addView(chipGroupLabel("EFFORT"));
         container.addView(impactEffortRow("effort"), matchWrap(0, 8, 0, 15));
-        container.addView(chipGroupLabel("DEPENDENCY"));
-        container.addView(depRow(), matchWrap(0, 8, 0, 15));
-
         LinearLayout flags = horizontal();
         TextView urgent = chipButton("Urgent: do now", draftUrgent, PriorityPalette.IMMEDIATE, 0xFFFFFFFF);
         urgent.setOnClickListener(v -> {
@@ -2247,21 +2500,6 @@ public final class MainActivity extends Activity {
                 updateSheetDynamic();
             });
             row.addView(chip, wrap(0, 0, i < opts.length - 1 ? 8 : 0, 0));
-        }
-        return row;
-    }
-
-    private LinearLayout depRow() {
-        LinearLayout row = horizontal();
-        for (int i = 0; i < DEPENDENCIES.length; i++) {
-            String val = DEPENDENCIES[i];
-            boolean active = draftDep.equals(val);
-            TextView chip = chipButton(val, active, PriorityPalette.DEP_PURPLE, 0xFFFFFFFF);
-            chip.setOnClickListener(v -> {
-                draftDep = val;
-                updateSheetDynamic();
-            });
-            row.addView(chip, wrap(0, 0, i < DEPENDENCIES.length - 1 ? 8 : 0, 0));
         }
         return row;
     }
@@ -2350,7 +2588,6 @@ public final class MainActivity extends Activity {
         task.notes = normalizeNotes(draftNotes);
         task.impact = draftImpact;
         task.effort = draftEffort;
-        task.dependency = draftDep;
         task.category = draftCategory;
         task.urgent = draftUrgent;
         task.quickTask = draftQuick;
@@ -2358,11 +2595,12 @@ public final class MainActivity extends Activity {
         task.reminderRepeatUnit = draftReminderAt > 0 ? draftRepeatUnit : TodoTask.REPEAT_NONE;
         task.reminderRepeatEvery = TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)
                 ? 1 : Math.max(1, draftRepeatEvery);
+        task.updatedAt = nextMutationTimestamp();
         if (isNew) {
             tasks.add(task);
         }
         ReminderScheduler.schedule(this, task);
-        store.save(tasks);
+        persistMutation();
         closeSheet();
         renderAll(true);
         if (isNew) {
@@ -2381,8 +2619,9 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (dialog, which) -> {
                     ReminderScheduler.cancel(this, task);
+                    recordTaskTombstone(task.id, nextMutationTimestamp());
                     tasks.remove(task);
-                    store.save(tasks);
+                    persistMutation();
                     closeSheet();
                     renderAll(true);
                 })
@@ -2798,19 +3037,21 @@ public final class MainActivity extends Activity {
 
     private void rescheduleFutureReminders() {
         boolean changed = false;
-        long now = System.currentTimeMillis();
+        long wallNow = System.currentTimeMillis();
+        long mutationTimestamp = nextMutationTimestamp();
         for (TodoTask task : tasks) {
-            if (!task.completed && task.repeatsReminder() && task.reminderAt <= now) {
-                long next = task.nextReminderAfter(now);
+            if (!task.completed && task.repeatsReminder() && task.reminderAt <= wallNow) {
+                long next = task.nextReminderAfter(wallNow);
                 if (next > 0) {
                     task.reminderAt = next;
+                    task.updatedAt = mutationTimestamp;
                     changed = true;
                 }
             }
             ReminderScheduler.schedule(this, task);
         }
         if (changed) {
-            store.save(tasks);
+            persistMutation();
         }
     }
 

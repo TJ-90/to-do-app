@@ -186,6 +186,7 @@ public final class TodoTaskTest {
         task.reminderRepeatUnit = TodoTask.REPEAT_WEEK;
         task.reminderRepeatEvery = 2;
         task.createdAt = 99L;
+        task.updatedAt = 101L;
 
         List<TodoTask> restored = CsvCodec.importTasks(CsvCodec.exportTasks(Arrays.asList(task)));
 
@@ -207,6 +208,19 @@ public final class TodoTaskTest {
         assertEquals(TodoTask.REPEAT_WEEK, copy.reminderRepeatUnit);
         assertEquals(2, copy.reminderRepeatEvery);
         assertEquals(99L, copy.createdAt);
+        assertEquals(101L, copy.updatedAt);
+    }
+
+    @Test
+    public void legacyJsonUsesCreatedAtAsUpdatedAt() throws Exception {
+        JSONObject json = new JSONObject();
+        json.put("id", "legacy");
+        json.put("createdAt", 42L);
+
+        TodoTask restored = TodoTask.fromJson(json);
+
+        assertEquals(42L, restored.createdAt);
+        assertEquals(42L, restored.updatedAt);
     }
 
     @Test

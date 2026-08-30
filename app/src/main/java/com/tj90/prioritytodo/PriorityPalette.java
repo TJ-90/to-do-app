@@ -6,7 +6,6 @@ final class PriorityPalette {
     static final int IMMEDIATE = 0xFFE82729;
     static final int NEXT_WEEK = 0xFFDFA700;
     static final int SOMEDAY = 0xFF006CE5;
-    static final int DEP_PURPLE = 0xFF894ED6;
     static final int GREEN_DONE_DAY = 0xFF00A448;
     static final int GREEN_DONE_NIGHT = 0xFF00B054;
     static final int GREEN_REVEAL = 0xFF3D9C5E;

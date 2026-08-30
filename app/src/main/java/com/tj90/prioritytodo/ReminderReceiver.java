@@ -11,8 +11,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
-import java.util.List;
-
 public final class ReminderReceiver extends BroadcastReceiver {
     static final String EXTRA_TASK_ID = "task_id";
     static final String EXTRA_TASK_TITLE = "task_title";
@@ -93,8 +91,8 @@ public final class ReminderReceiver extends BroadcastReceiver {
         }
 
         TaskStore store = new TaskStore(context);
-        List<TodoTask> tasks = store.load();
-        for (TodoTask task : tasks) {
+        SyncState state = store.loadSyncState();
+        for (TodoTask task : state.tasks) {
             if (!taskId.equals(task.id) || task.completed || !task.repeatsReminder()) {
                 continue;
             }
@@ -102,7 +100,8 @@ public final class ReminderReceiver extends BroadcastReceiver {
             long nextReminder = task.nextReminderAfter(System.currentTimeMillis());
             if (nextReminder > 0) {
                 task.reminderAt = nextReminder;
-                store.save(tasks);
+                task.updatedAt = state.nextMutationTimestamp(System.currentTimeMillis());
+                store.saveSyncState(state);
                 ReminderScheduler.schedule(context, task);
             }
             return;
