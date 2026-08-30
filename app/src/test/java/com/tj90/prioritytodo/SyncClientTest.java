@@ -14,6 +14,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -25,38 +27,62 @@ public final class SyncClientTest {
     public void syncPostsJsonToApiPathAndDecodesSuccess() throws Exception {
         AtomicReference<CapturedRequest> captured = new AtomicReference<>();
         try (LoopbackServer server = new LoopbackServer(200, EMPTY_STATE, captured)) {
-            SyncState response = SyncClient.sync(
-                    server.baseUrl(), "access-client-id", "access-client-secret",
+            SyncState response = SyncClient.sync(server.baseUrl(), "", "",
                     "{\"client\":\"android\"}");
 
             assertTrue(response.tasks.isEmpty());
             CapturedRequest request = server.awaitRequest();
             assertEquals("POST /api/sync HTTP/1.1", request.requestLine);
             assertEquals("application/json; charset=utf-8", request.contentType);
-            assertEquals("access-client-id", request.accessClientId);
-            assertEquals("access-client-secret", request.accessClientSecret);
+            assertNull(request.accessClientId);
+            assertNull(request.accessClientSecret);
             assertEquals("{\"client\":\"android\"}", request.body);
         }
     }
 
     @Test
-    public void syncOmitsAccessHeadersWhenCredentialsAreBlank() throws Exception {
-        AtomicReference<CapturedRequest> captured = new AtomicReference<>();
-        try (LoopbackServer server = new LoopbackServer(200, EMPTY_STATE, captured)) {
-            SyncClient.sync(server.baseUrl(), "", "", EMPTY_STATE);
+    public void accessHeadersAreAppliedOnlyToHttpsConnections() throws Exception {
+        RecordingConnection connection = new RecordingConnection(
+                new URL("https://tasks.thejas.space/api/sync"));
 
-            CapturedRequest request = server.awaitRequest();
-            assertNull(request.accessClientId);
-            assertNull(request.accessClientSecret);
-        }
+        SyncClient.applyAccessHeaders(
+                connection, "https://tasks.thejas.space",
+                " access-client-id ", " access-client-secret ");
+
+        assertEquals("access-client-id", connection.getRequestProperty("CF-Access-Client-Id"));
+        assertEquals("access-client-secret",
+                connection.getRequestProperty("CF-Access-Client-Secret"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void accessCredentialsAreRejectedOverHttp() throws Exception {
+        RecordingConnection connection = new RecordingConnection(
+                new URL("http://10.0.2.2:8787/api/sync"));
+        SyncClient.applyAccessHeaders(
+                connection, "http://10.0.2.2:8787", "client-id", "client-secret");
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void oneSidedAccessCredentialsAreRejected() throws Exception {
+        RecordingConnection connection = new RecordingConnection(
+                new URL("https://tasks.thejas.space/api/sync"));
+        SyncClient.applyAccessHeaders(
+                connection, "https://tasks.thejas.space", "client-id", "");
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void clientSecretWithoutClientIdIsRejected() throws Exception {
+        RecordingConnection connection = new RecordingConnection(
+                new URL("https://tasks.thejas.space/api/sync"));
+        SyncClient.applyAccessHeaders(
+                connection, "https://tasks.thejas.space", "", "client-secret");
     }
 
     @Test
     public void syncRejectsCloudflareLoginRedirectWithoutFollowingIt() throws Exception {
         try (LoopbackServer server = new LoopbackServer(302, "", new AtomicReference<>())) {
             try {
-                SyncClient.sync(
-                        server.baseUrl(), "access-client-id", "access-client-secret", EMPTY_STATE);
+                SyncClient.sync(server.baseUrl(), "", "", EMPTY_STATE);
                 fail("Expected the Cloudflare Access redirect to fail sync");
             } catch (IOException exception) {
                 assertEquals("Sync server returned HTTP 302", exception.getMessage());
@@ -93,6 +119,16 @@ public final class SyncClientTest {
             this.accessClientSecret = accessClientSecret;
             this.body = body;
         }
+    }
+
+    private static final class RecordingConnection extends HttpURLConnection {
+        RecordingConnection(URL url) {
+            super(url);
+        }
+
+        @Override public void disconnect() { }
+        @Override public boolean usingProxy() { return false; }
+        @Override public void connect() { }
     }
 
     private static final class LoopbackServer implements AutoCloseable {

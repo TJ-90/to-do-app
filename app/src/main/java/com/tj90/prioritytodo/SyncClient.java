@@ -11,6 +11,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 final class SyncClient {
     private static final int CONNECT_TIMEOUT_MS = 5000;
@@ -44,8 +45,9 @@ final class SyncClient {
 
     static SyncState sync(String baseUrl, String accessClientId,
                           String accessClientSecret, String requestJson) throws Exception {
+        String normalizedBaseUrl = normalizeBaseUrl(baseUrl);
         HttpURLConnection connection = (HttpURLConnection) new URL(
-                normalizeBaseUrl(baseUrl) + "/api/sync").openConnection();
+                normalizedBaseUrl + "/api/sync").openConnection();
         connection.setRequestMethod("POST");
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -53,11 +55,7 @@ final class SyncClient {
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("Accept", "application/json");
-        if (accessClientId != null && !accessClientId.trim().isEmpty()
-                && accessClientSecret != null && !accessClientSecret.trim().isEmpty()) {
-            connection.setRequestProperty("CF-Access-Client-Id", accessClientId.trim());
-            connection.setRequestProperty("CF-Access-Client-Secret", accessClientSecret.trim());
-        }
+        applyAccessHeaders(connection, normalizedBaseUrl, accessClientId, accessClientSecret);
         byte[] body = requestJson.getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(body.length);
         try {
@@ -74,6 +72,35 @@ final class SyncClient {
             return parseResponse(response);
         } finally {
             connection.disconnect();
+        }
+    }
+
+    static void applyAccessHeaders(HttpURLConnection connection, String normalizedBaseUrl,
+                                   String accessClientId, String accessClientSecret) {
+        String clientId = accessClientId == null ? "" : accessClientId.trim();
+        String clientSecret = accessClientSecret == null ? "" : accessClientSecret.trim();
+        validateAccessCredentials(normalizedBaseUrl, clientId, clientSecret);
+        if (clientId.isEmpty()) {
+            return;
+        }
+        connection.setRequestProperty("CF-Access-Client-Id", clientId);
+        connection.setRequestProperty("CF-Access-Client-Secret", clientSecret);
+    }
+
+    static void validateAccessCredentials(String normalizedBaseUrl,
+                                          String accessClientId, String accessClientSecret) {
+        String clientId = accessClientId == null ? "" : accessClientId.trim();
+        String clientSecret = accessClientSecret == null ? "" : accessClientSecret.trim();
+        if (clientId.isEmpty() != clientSecret.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Enter both the Cloudflare Access Client ID and Client Secret.");
+        }
+        if (clientId.isEmpty()) {
+            return;
+        }
+        if (!normalizedBaseUrl.toLowerCase(Locale.US).startsWith("https://")) {
+            throw new IllegalArgumentException(
+                    "Cloudflare Access credentials require an HTTPS server URL.");
         }
     }
 

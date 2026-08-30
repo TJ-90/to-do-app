@@ -82,6 +82,7 @@ public final class MainActivity extends Activity {
     private static final String KEY_SYNC_BASE_URL = "sync_base_url";
     private static final String KEY_SYNC_ACCESS_CLIENT_ID = "access_client_id";
     private static final String KEY_SYNC_ACCESS_CLIENT_SECRET = "access_client_secret";
+    private static final String KEY_SYNC_ACCESS_BASE_URL = "access_base_url";
     private static final String DEFAULT_SYNC_BASE_URL = "http://10.0.2.2:8787";
 
     private static final String THEME_DAY = "day";
@@ -112,6 +113,7 @@ public final class MainActivity extends Activity {
     private String syncBaseUrl = "";
     private String syncAccessClientId = "";
     private String syncAccessClientSecret = "";
+    private String syncAccessBaseUrl = "";
     private boolean syncInFlight;
     private boolean syncQueued;
     private boolean queuedManualSync;
@@ -259,6 +261,7 @@ public final class MainActivity extends Activity {
                 SYNC_CREDENTIAL_PREFS, MODE_PRIVATE);
         syncAccessClientId = syncCredentials.getString(KEY_SYNC_ACCESS_CLIENT_ID, "");
         syncAccessClientSecret = syncCredentials.getString(KEY_SYNC_ACCESS_CLIENT_SECRET, "");
+        syncAccessBaseUrl = syncCredentials.getString(KEY_SYNC_ACCESS_BASE_URL, "");
     }
 
     private void persistPrefs() {
@@ -486,12 +489,14 @@ public final class MainActivity extends Activity {
         endpointInput.setSelectAllOnFocus(true);
         fields.addView(endpointInput, matchWrap(0, 0, 0, 8));
 
+        boolean credentialsMatchServer = !syncBaseUrl.isEmpty()
+                && syncBaseUrl.equals(syncAccessBaseUrl);
         EditText clientIdInput = new EditText(this);
         clientIdInput.setSingleLine(true);
         clientIdInput.setInputType(
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         clientIdInput.setHint("Cloudflare Access Client ID (optional)");
-        clientIdInput.setText(syncAccessClientId);
+        clientIdInput.setText(credentialsMatchServer ? syncAccessClientId : "");
         clientIdInput.setSelectAllOnFocus(true);
         fields.addView(clientIdInput, matchWrap(0, 0, 0, 8));
 
@@ -500,9 +505,23 @@ public final class MainActivity extends Activity {
         clientSecretInput.setInputType(
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         clientSecretInput.setHint("Cloudflare Access Client Secret (optional)");
-        clientSecretInput.setText(syncAccessClientSecret);
+        clientSecretInput.setText(credentialsMatchServer ? syncAccessClientSecret : "");
         clientSecretInput.setSelectAllOnFocus(true);
         fields.addView(clientSecretInput, matchWrap(0, 0, 0, 0));
+
+        final String initialEndpoint = endpointInput.getText().toString().trim();
+        endpointInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence value, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable value) {
+                if (!value.toString().trim().equals(initialEndpoint)
+                        && (!clientIdInput.getText().toString().isEmpty()
+                        || !clientSecretInput.getText().toString().isEmpty())) {
+                    clientIdInput.setText("");
+                    clientSecretInput.setText("");
+                }
+            }
+        });
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Sync with web")
@@ -524,14 +543,19 @@ public final class MainActivity extends Activity {
                             }
                             return;
                         }
-                        syncBaseUrl = SyncClient.normalizeBaseUrl(
+                        String normalizedBaseUrl = SyncClient.normalizeBaseUrl(
                                 endpointInput.getText().toString());
+                        SyncClient.validateAccessCredentials(
+                                normalizedBaseUrl, clientId, clientSecret);
+                        syncBaseUrl = normalizedBaseUrl;
                         syncAccessClientId = clientId;
                         syncAccessClientSecret = clientSecret;
+                        syncAccessBaseUrl = clientId.isEmpty() ? "" : syncBaseUrl;
                         persistPrefs();
                         getSharedPreferences(SYNC_CREDENTIAL_PREFS, MODE_PRIVATE).edit()
                                 .putString(KEY_SYNC_ACCESS_CLIENT_ID, syncAccessClientId)
                                 .putString(KEY_SYNC_ACCESS_CLIENT_SECRET, syncAccessClientSecret)
+                                .putString(KEY_SYNC_ACCESS_BASE_URL, syncAccessBaseUrl)
                                 .apply();
                         endpointInput.setError(null);
                         clientIdInput.setError(null);
@@ -595,6 +619,20 @@ public final class MainActivity extends Activity {
         final String baseUrl = syncBaseUrl;
         final String accessClientId = syncAccessClientId;
         final String accessClientSecret = syncAccessClientSecret;
+        try {
+            SyncClient.validateAccessCredentials(
+                    baseUrl, accessClientId, accessClientSecret);
+            if (!accessClientId.isEmpty() && !baseUrl.equals(syncAccessBaseUrl)) {
+                throw new IllegalArgumentException(
+                        "Cloudflare Access credentials belong to a different server. Open Sync with web and paste them again.");
+            }
+        } catch (IllegalArgumentException exception) {
+            syncInFlight = false;
+            if (manual) {
+                showDataError("Sync credentials invalid", exception.getMessage());
+            }
+            return;
+        }
         new Thread(() -> {
             try {
                 SyncState response = SyncClient.sync(
