@@ -133,6 +133,11 @@ test("JavaScript assets are served with JavaScript MIME types", async () => {
     assert.equal(model.status, 200);
     assert.match(model.headers.get("content-type"), /text\/javascript/);
     assert.match(await model.text(), /scoreTask/);
+
+    const sync = await fetch(`${baseUrl}/sync.js`);
+    assert.equal(sync.status, 200);
+    assert.match(sync.headers.get("content-type"), /text\/javascript/);
+    assert.match(await sync.text(), /postSyncState/);
   });
 });
 

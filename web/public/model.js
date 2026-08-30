@@ -25,6 +25,28 @@ export function sortTasks(tasks) {
   });
 }
 
+export function shouldApplySyncResponse(requestedRevision, currentRevision) {
+  return requestedRevision === currentRevision;
+}
+
+export function hasSameSyncState(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function nextMutationTimestamp(state, now = Date.now()) {
+  let greatestObserved = 0;
+  for (const task of state.tasks ?? []) greatestObserved = Math.max(greatestObserved, timestampOr(task.updatedAt, 0));
+  for (const tombstone of state.taskTombstones ?? []) greatestObserved = Math.max(greatestObserved, timestampOr(tombstone.deletedAt, 0));
+  for (const category of state.categories ?? []) {
+    greatestObserved = Math.max(
+      greatestObserved,
+      timestampOr(category.updatedAt, 0),
+      timestampOr(category.deletedAt, 0)
+    );
+  }
+  return Math.max(timestampOr(now, 0), greatestObserved + 1);
+}
+
 export function normalizeTask(value, now = Date.now()) {
   const createdAt = timestampOr(value.createdAt, now);
   const updatedAt = timestampOr(value.updatedAt, createdAt);

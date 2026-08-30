@@ -1,4 +1,11 @@
-import { normalizeTask, sortTasks } from "/model.js";
+import {
+  hasSameSyncState,
+  nextMutationTimestamp,
+  normalizeTask,
+  shouldApplySyncResponse,
+  sortTasks
+} from "/model.js";
+import { postSyncState } from "/sync.js";
 
 const STORAGE_KEY = "priority-todo-sync-state-v1";
 const SPECTRUM = ["#d84343", "#ef6c38", "#e5a928", "#4f9a55", "#357cbf", "#4a58a8", "#7954a4"];
@@ -24,6 +31,7 @@ let editingId = null;
 let syncTimer = null;
 let syncing = false;
 let syncQueued = false;
+let localRevision = 0;
 
 document.querySelector("#today-label").textContent = new Intl.DateTimeFormat(undefined, {
   weekday: "long", month: "long", day: "numeric"
@@ -60,7 +68,8 @@ document.querySelector("#new-list").addEventListener("keydown", (event) => {
 
 elements.taskForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const now = Date.now();
+  const createdAt = Date.now();
+  const updatedAt = nextMutationTimestamp(state);
   const existing = state.tasks.find((task) => task.id === editingId);
   const task = normalizeTask({
     ...(existing ?? {}),
@@ -74,8 +83,8 @@ elements.taskForm.addEventListener("submit", (event) => {
     quickTask: document.querySelector("#task-quick").checked,
     snoozed: existing?.snoozed ?? false,
     completed: existing?.completed ?? false,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now
+    createdAt: existing?.createdAt ?? createdAt,
+    updatedAt
   });
   if (existing) state.tasks = state.tasks.map((value) => value.id === task.id ? task : value);
   else state.tasks.push(task);
@@ -182,12 +191,13 @@ function refreshCategoryPicker(categories, selected = elements.category.value) {
 }
 
 function updateTask(id, changes) {
-  state.tasks = state.tasks.map((task) => task.id === id ? { ...task, ...changes, updatedAt: Date.now() } : task);
+  const updatedAt = nextMutationTimestamp(state);
+  state.tasks = state.tasks.map((task) => task.id === id ? { ...task, ...changes, updatedAt } : task);
   commitMutation();
 }
 
 function deleteTask(id) {
-  const deletedAt = Date.now();
+  const deletedAt = nextMutationTimestamp(state);
   state.tasks = state.tasks.filter((task) => task.id !== id);
   const existing = state.taskTombstones.find((item) => item.id === id);
   if (existing) existing.deletedAt = Math.max(existing.deletedAt, deletedAt);
@@ -235,22 +245,23 @@ function createList() {
 }
 
 function upsertList(name) {
-  const now = Date.now();
+  const updatedAt = nextMutationTimestamp(state);
   const existing = state.categories.find((category) => category.name.toLocaleLowerCase() === name.toLocaleLowerCase());
-  if (existing) Object.assign(existing, { name, updatedAt: now, deletedAt: 0 });
-  else state.categories.push({ name, updatedAt: now, deletedAt: 0 });
+  if (existing) Object.assign(existing, { name, updatedAt, deletedAt: 0 });
+  else state.categories.push({ name, updatedAt, deletedAt: 0 });
 }
 
 function deleteList(name) {
-  const now = Date.now();
-  state.categories = state.categories.map((category) => category.name === name ? { ...category, deletedAt: now } : category);
-  state.tasks = state.tasks.map((task) => task.category === name ? { ...task, category: null, updatedAt: now } : task);
+  const mutationTimestamp = nextMutationTimestamp(state);
+  state.categories = state.categories.map((category) => category.name === name ? { ...category, deletedAt: mutationTimestamp } : category);
+  state.tasks = state.tasks.map((task) => task.category === name ? { ...task, category: null, updatedAt: mutationTimestamp } : task);
   if (activeList === name) activeList = "All";
   commitMutation();
   renderListManager();
 }
 
 function commitMutation() {
+  localRevision += 1;
   saveLocalState();
   render();
   clearTimeout(syncTimer);
@@ -258,21 +269,27 @@ function commitMutation() {
 }
 
 async function syncNow() {
+  clearTimeout(syncTimer);
+  syncTimer = null;
   if (syncing) { syncQueued = true; return; }
   syncing = true;
   syncQueued = false;
+  const requestedRevision = localRevision;
   setSyncStatus("Syncing…");
   try {
-    const response = await fetch("/api/sync", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(state)
-    });
+    const response = await postSyncState(state);
     if (!response.ok) throw new Error(`Sync failed (${response.status})`);
-    state = await response.json();
-    saveLocalState();
-    render();
-    setSyncStatus("Synced");
+    const responseState = await response.json();
+    if (shouldApplySyncResponse(requestedRevision, localRevision)) {
+      if (!hasSameSyncState(state, responseState)) {
+        state = responseState;
+        saveLocalState();
+        render();
+      }
+      setSyncStatus("Synced");
+    } else {
+      syncQueued = true;
+    }
   } catch (error) {
     setSyncStatus(navigator.onLine ? "Sync unavailable" : "Offline", true);
     console.warn(error);
