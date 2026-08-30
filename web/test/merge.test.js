@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { mergeState } from "../lib/store.js";
+import { maxObservedTimestamp, mergeState, normalizeState } from "../lib/store.js";
 
 test("merge is last-write-wins for tasks and retains the newest tombstone", () => {
   const current = {
@@ -46,4 +46,35 @@ test("categories merge using their latest update or deletion event", () => {
     { name: "Home", updatedAt: 15, deletedAt: 0 },
     { name: "Work", updatedAt: 10, deletedAt: 30 }
   ]);
+});
+
+test("normalization preserves client timestamps and exposes the observed logical-clock maximum", () => {
+  const state = normalizeState({
+    tasks: [{ id: "a", title: "Task", createdAt: 10, updatedAt: 500 }],
+    taskTombstones: [{ id: "gone", deletedAt: 700 }],
+    categories: [{ name: "Work", updatedAt: 600, deletedAt: 0 }]
+  });
+
+  assert.equal(state.tasks[0].updatedAt, 500);
+  assert.equal(state.taskTombstones[0].deletedAt, 700);
+  assert.equal(state.categories[0].updatedAt, 600);
+  assert.equal(maxObservedTimestamp(state), 700);
+});
+
+test("a monotonic client timestamp lets a slow-clock delete supersede the observed task", () => {
+  const current = normalizeState({
+    tasks: [{ id: "a", title: "Edited elsewhere", createdAt: 1, updatedAt: 10_000 }],
+    taskTombstones: [],
+    categories: []
+  });
+  const nextTimestamp = maxObservedTimestamp(current) + 1;
+
+  const merged = mergeState(current, {
+    tasks: [],
+    taskTombstones: [{ id: "a", deletedAt: nextTimestamp }],
+    categories: []
+  });
+
+  assert.deepEqual(merged.tasks, []);
+  assert.deepEqual(merged.taskTombstones, [{ id: "a", deletedAt: 10_001 }]);
 });

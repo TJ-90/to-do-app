@@ -3,6 +3,15 @@ import path from "node:path";
 
 import { normalizeTask, validateSyncState } from "../public/model.js";
 
+export const MAX_SYNC_STATE_BYTES = 2 * 1024 * 1024;
+
+export class SyncStateTooLargeError extends Error {
+  constructor() {
+    super("Merged sync state is too large");
+    this.statusCode = 413;
+  }
+}
+
 export const EMPTY_STATE = Object.freeze({
   tasks: Object.freeze([]),
   taskTombstones: Object.freeze([]),
@@ -60,6 +69,16 @@ export function mergeState(current, incoming) {
   });
 }
 
+export function maxObservedTimestamp(state) {
+  let maximum = 0;
+  for (const task of state.tasks ?? []) maximum = Math.max(maximum, finiteTimestamp(task?.updatedAt));
+  for (const tombstone of state.taskTombstones ?? []) maximum = Math.max(maximum, finiteTimestamp(tombstone?.deletedAt));
+  for (const category of state.categories ?? []) {
+    maximum = Math.max(maximum, finiteTimestamp(category?.updatedAt), finiteTimestamp(category?.deletedAt));
+  }
+  return maximum;
+}
+
 export class SyncStore {
   #dataFile;
   #queue = Promise.resolve();
@@ -81,6 +100,9 @@ export class SyncStore {
     validateSyncState(incoming);
     const operation = this.#queue.then(async () => {
       const state = mergeState(await this.read(), incoming);
+      if (Buffer.byteLength(JSON.stringify(state)) > MAX_SYNC_STATE_BYTES) {
+        throw new SyncStateTooLargeError();
+      }
       await this.#writeAtomically(state);
       return state;
     });

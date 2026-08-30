@@ -26,13 +26,25 @@ The web client always syncs against its own origin. Point the Android app's sync
 - Android emulator: `http://10.0.2.2:8787`
 - Physical device: `http://<computer-lan-ip>:8787`
 
+Literal IP addresses and `localhost` are accepted by default. If you connect through a hostname, explicitly allow it with a comma-separated list:
+
+```bash
+ALLOWED_HOSTS=todo-box.local,my-laptop npm start
+```
+
+Requests carrying any other hostname are rejected to protect the unauthenticated local service from DNS-rebinding attacks.
+
 Both clients send their local state to `POST /api/sync`. The response is the merged state, using `updatedAt` for task last-write-wins resolution and deletion tombstones to prevent removed tasks from returning. Older tasks without `updatedAt` use `createdAt` as their initial version timestamp.
+
+Clients should treat timestamps as a monotonic logical clock: after each response, observe the greatest `updatedAt` or `deletedAt` value and generate subsequent mutation timestamps greater than that maximum (while still using the local clock when it is ahead). The server preserves client timestamps and returns canonical state; it does not rewrite timestamps on arrival.
 
 ## API
 
 - `GET /api/health` — service health
 - `GET /api/state` — current normalized state
 - `POST /api/sync` — merge and return `{ tasks, taskTombstones, categories }`
+
+Request bodies and compact merged responses are limited to 2 MiB. A merge that would exceed the response limit is rejected with JSON status `413` and leaves the previously persisted state unchanged.
 
 ## Verify
 
