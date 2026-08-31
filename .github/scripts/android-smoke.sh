@@ -347,8 +347,11 @@ import xml.etree.ElementTree as ET
 
 SCREENSHOT_DIR = "app/build/verification-screenshots"
 
+def parse_bounds(bounds):
+    return list(map(int, re.findall(r"\d+", bounds)))
+
 def center(bounds):
-    x1, y1, x2, y2 = map(int, re.findall(r"\d+", bounds))
+    x1, y1, x2, y2 = parse_bounds(bounds)
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-add-panel.xml").getroot()
@@ -356,12 +359,155 @@ edit = next(node for node in root.iter("node") if node.attrib.get("class") == "a
 x, y = center(edit.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/title-input-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
+clock = next((node for node in root.iter("node")
+              if node.attrib.get("content-desc") == "Set reminder"), None)
+repeat_label = next((node for node in root.iter("node")
+                     if node.attrib.get("content-desc") == "Repeats every"), None)
+repeat_interval = next((node for node in root.iter("node")
+                        if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
+repeat_unit = next((node for node in root.iter("node")
+                    if node.attrib.get("content-desc", "").startswith("Repeat unit:")), None)
+if clock is None or repeat_label is None or repeat_interval is None or repeat_unit is None:
+    raise AssertionError(
+        "New-task sheet must show the reminder clock, Repeats every label, interval, and unit dropdown")
+if any(node.attrib.get("visible-to-user") == "false"
+       for node in (clock, repeat_label, repeat_interval, repeat_unit)):
+    raise AssertionError("Reminder repeat controls are present but not visible in the new-task sheet")
+clock_bounds = parse_bounds(clock.attrib["bounds"])
+label_bounds = parse_bounds(repeat_label.attrib["bounds"])
+interval_bounds = parse_bounds(repeat_interval.attrib["bounds"])
+unit_bounds = parse_bounds(repeat_unit.attrib["bounds"])
+if label_bounds[0] < clock_bounds[2] or interval_bounds[0] < label_bounds[2] or unit_bounds[0] < interval_bounds[2]:
+    raise AssertionError(
+        f"Repeat controls must sit inline after the clock: clock={clock_bounds}, "
+        f"label={label_bounds}, interval={interval_bounds}, unit={unit_bounds}")
+if max(clock_bounds[1], label_bounds[1], interval_bounds[1], unit_bounds[1]) >= min(
+        clock_bounds[3], label_bounds[3], interval_bounds[3], unit_bounds[3]):
+    raise AssertionError("Reminder controls do not overlap on one horizontal row")
+if interval_bounds[2] - interval_bounds[0] < 80 or unit_bounds[2] - unit_bounds[0] < 100:
+    raise AssertionError(
+        f"Repeat controls are too narrow: interval={interval_bounds}, unit={unit_bounds}")
+if min(clock_bounds[0], label_bounds[0], interval_bounds[0], unit_bounds[0]) < 0 or unit_bounds[2] > 720:
+    raise AssertionError(f"Repeat controls extend outside the CI viewport: unit={unit_bounds}")
+with open(f"{SCREENSHOT_DIR}/reminder-clock-center.txt", "w") as f:
+    f.write(f"{(clock_bounds[0] + clock_bounds[2]) // 2} "
+            f"{(clock_bounds[1] + clock_bounds[3]) // 2}\n")
+with open(f"{SCREENSHOT_DIR}/repeat-unit-center.txt", "w") as f:
+    f.write(f"{(unit_bounds[0] + unit_bounds[2]) // 2} "
+            f"{(unit_bounds[1] + unit_bounds[3]) // 2}\n")
 list_pill = next(node for node in root.iter("node")
                  if node.attrib.get("content-desc", "").startswith("List: No list"))
 x, y = center(list_pill.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/initial-list-pill-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
+
+read repeat_unit_x repeat_unit_y < "$SCREENSHOT_DIR/repeat-unit-center.txt"
+adb shell input tap "$repeat_unit_x" "$repeat_unit_y"
+sleep 1
+tap_ui_label /sdcard/window-repeat-menu.xml "$SCREENSHOT_DIR/window-repeat-menu.xml" "Days"
+sleep 1
+adb shell uiautomator dump /sdcard/window-repeat-days.xml >/dev/null
+adb pull /sdcard/window-repeat-days.xml "$SCREENSHOT_DIR/window-repeat-days.xml" >/dev/null
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-repeat-days.xml").getroot()
+interval = next((node for node in root.iter("node")
+                 if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
+unit = next((node for node in root.iter("node")
+             if node.attrib.get("content-desc", "").startswith("Repeat unit: Days")), None)
+if interval is None or interval.attrib.get("class") != "android.widget.EditText":
+    raise AssertionError("Selecting Days did not expose an editable repeat interval")
+if interval.attrib.get("enabled") == "false":
+    raise AssertionError("Repeat interval stayed disabled after selecting Days")
+if unit is None:
+    raise AssertionError("Repeat-unit dropdown did not retain the Days selection")
+x1, y1, x2, y2 = map(int, re.findall(r"\d+", unit.attrib["bounds"]))
+with open(f"{SCREENSHOT_DIR}/repeat-days-center.txt", "w") as f:
+    f.write(f"{(x1 + x2) // 2} {(y1 + y2) // 2}\n")
+PY
+
+read repeat_days_x repeat_days_y < "$SCREENSHOT_DIR/repeat-days-center.txt"
+adb shell input tap "$repeat_days_x" "$repeat_days_y"
+sleep 1
+tap_ui_label /sdcard/window-repeat-reset-menu.xml "$SCREENSHOT_DIR/window-repeat-reset-menu.xml" "No repeat"
+sleep 1
+adb shell uiautomator dump /sdcard/window-repeat-reset.xml >/dev/null
+adb pull /sdcard/window-repeat-reset.xml "$SCREENSHOT_DIR/window-repeat-reset.xml" >/dev/null
+
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-repeat-reset.xml").getroot()
+edits = [node for node in root.iter("node")
+         if node.attrib.get("class") == "android.widget.EditText"]
+if len(edits) != 1:
+    raise AssertionError(f"No repeat should leave only the title input editable; found {len(edits)} fields")
+if not any(node.attrib.get("content-desc", "").startswith("Repeat unit: No repeat")
+           for node in root.iter("node")):
+    raise AssertionError("Repeat-unit dropdown did not reset to No repeat")
+PY
+
+read reminder_clock_x reminder_clock_y < "$SCREENSHOT_DIR/reminder-clock-center.txt"
+adb shell input tap "$reminder_clock_x" "$reminder_clock_y"
+sleep 1
+tap_ui_label /sdcard/window-reminder-date.xml "$SCREENSHOT_DIR/window-reminder-date.xml" "OK"
+sleep 1
+tap_ui_label /sdcard/window-reminder-time.xml "$SCREENSHOT_DIR/window-reminder-time.xml" "OK"
+sleep 1
+adb shell uiautomator dump /sdcard/window-reminder-active.xml >/dev/null
+adb pull /sdcard/window-reminder-active.xml "$SCREENSHOT_DIR/window-reminder-active.xml" >/dev/null
+
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+
+def bounds(node):
+    return list(map(int, re.findall(r"\d+", node.attrib["bounds"])))
+
+root = ET.parse(f"{SCREENSHOT_DIR}/window-reminder-active.xml").getroot()
+clock = next((node for node in root.iter("node")
+              if node.attrib.get("content-desc", "").startswith("Reminder set for ")), None)
+label = next((node for node in root.iter("node")
+              if node.attrib.get("content-desc") == "Repeats every"), None)
+interval = next((node for node in root.iter("node")
+                 if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
+unit = next((node for node in root.iter("node")
+             if node.attrib.get("content-desc", "").startswith("Repeat unit:")), None)
+clear = next((node for node in root.iter("node")
+              if node.attrib.get("content-desc") == "Clear reminder"), None)
+if any(node is None for node in (clock, label, interval, unit, clear)):
+    raise AssertionError("Active reminder row is missing the clock, repeat controls, or Clear button")
+clock_bounds, label_bounds, interval_bounds, unit_bounds, clear_bounds = map(
+    bounds, (clock, label, interval, unit, clear))
+if not (clock_bounds[2] <= label_bounds[0] <= label_bounds[2] <= interval_bounds[0]
+        <= interval_bounds[2] <= unit_bounds[0] <= unit_bounds[2] <= clear_bounds[0]):
+    raise AssertionError(
+        f"Active reminder controls overlap horizontally: clock={clock_bounds}, label={label_bounds}, "
+        f"interval={interval_bounds}, unit={unit_bounds}, clear={clear_bounds}")
+if max(clock_bounds[1], label_bounds[1], interval_bounds[1], unit_bounds[1], clear_bounds[1]) >= min(
+        clock_bounds[3], label_bounds[3], interval_bounds[3], unit_bounds[3], clear_bounds[3]):
+    raise AssertionError("Active reminder controls do not share one horizontal row")
+if interval_bounds[2] - interval_bounds[0] < 80 or unit_bounds[2] - unit_bounds[0] < 100:
+    raise AssertionError(
+        f"Active repeat controls are too narrow: interval={interval_bounds}, unit={unit_bounds}")
+if clear_bounds[2] > 720:
+    raise AssertionError(f"Active reminder controls extend outside the viewport: clear={clear_bounds}")
+with open(f"{SCREENSHOT_DIR}/clear-reminder-center.txt", "w") as f:
+    f.write(f"{(clear_bounds[0] + clear_bounds[2]) // 2} "
+            f"{(clear_bounds[1] + clear_bounds[3]) // 2}\n")
+PY
+
+read clear_reminder_x clear_reminder_y < "$SCREENSHOT_DIR/clear-reminder-center.txt"
+adb shell input tap "$clear_reminder_x" "$clear_reminder_y"
+sleep 1
 
 read initial_list_x initial_list_y < "$SCREENSHOT_DIR/initial-list-pill-center.txt"
 adb shell input tap "$initial_list_x" "$initial_list_y"

@@ -167,6 +167,7 @@ public final class MainActivity extends Activity {
     private long draftReminderAt;
     private String draftRepeatUnit = TodoTask.REPEAT_NONE;
     private int draftRepeatEvery = 1;
+    private String draftRepeatEveryText = "1";
     private boolean draftRepeatEveryValid = true;
     private boolean detailsExpanded;
     private boolean notesExpanded;
@@ -1944,6 +1945,7 @@ public final class MainActivity extends Activity {
         draftReminderAt = 0;
         draftRepeatUnit = TodoTask.REPEAT_NONE;
         draftRepeatEvery = 1;
+        draftRepeatEveryText = "1";
         draftRepeatEveryValid = true;
         draftCategory = "All".equals(activeCat) ? null : activeCat;
         detailsExpanded = false;
@@ -1967,8 +1969,8 @@ public final class MainActivity extends Activity {
         draftReminderAt = task.reminderAt;
         draftRepeatUnit = task.reminderRepeatUnit;
         draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
-        draftRepeatEveryValid = TodoTask.parseRepeatInterval(
-                String.valueOf(task.reminderRepeatEvery)) > 0;
+        draftRepeatEveryText = String.valueOf(task.reminderRepeatEvery);
+        draftRepeatEveryValid = TodoTask.parseRepeatInterval(draftRepeatEveryText) > 0;
         draftCategory = task.category;
         detailsExpanded = false;
         notesExpanded = shouldExpandNotes(sheetMode, draftNotes);
@@ -2118,7 +2120,7 @@ public final class MainActivity extends Activity {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
                 draftName = s.toString();
-                updateSheetDynamic();
+                updateCommitButtonState();
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -2179,9 +2181,13 @@ public final class MainActivity extends Activity {
         remindChip = new ReminderClockButton();
         remindChip.setOnClickListener(v -> openReminderPicker());
         reminderRow.addView(remindChip, wrap(0, 0, 8, 0));
-        remindClear = text("Clear", 12, 700, palette.sub);
+        reminderRepeatRow = horizontal();
+        reminderRow.addView(reminderRepeatRow, weight(1, 0, 0, 8, 0));
+        remindClear = text("×", 18, 700, palette.sub);
         remindClear.setGravity(Gravity.CENTER);
-        remindClear.setPadding(dp(12), dp(9), dp(12), dp(9));
+        remindClear.setMinWidth(dp(44));
+        remindClear.setMinHeight(dp(44));
+        remindClear.setContentDescription("Clear reminder");
         GradientDrawable clearBg = new GradientDrawable();
         clearBg.setColor(Color.TRANSPARENT);
         clearBg.setCornerRadius(dp(12));
@@ -2191,14 +2197,12 @@ public final class MainActivity extends Activity {
             draftReminderAt = 0;
             draftRepeatUnit = TodoTask.REPEAT_NONE;
             draftRepeatEvery = 1;
+            draftRepeatEveryText = "1";
             draftRepeatEveryValid = true;
             updateSheetDynamic();
         });
         reminderRow.addView(remindClear, wrap(0, 0, 0, 0));
         content.addView(reminderRow, wrap(0, 12, 0, 0));
-
-        reminderRepeatRow = horizontal();
-        content.addView(reminderRepeatRow, matchWrap(0, 8, 0, 0));
 
         detailsToggle = text("", 12, 800, palette.accentInk);
         LinearLayout toggleRow = horizontal();
@@ -2405,9 +2409,7 @@ public final class MainActivity extends Activity {
         }
 
         reminderRepeatRow.removeAllViews();
-        if (draftReminderAt > 0) {
-            buildRepeatControls(reminderRepeatRow);
-        }
+        buildRepeatControls(reminderRepeatRow);
 
         if (!detailsAnimating) {
             chipsContainer.removeAllViews();
@@ -2633,14 +2635,16 @@ public final class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
 
-        TextView label = text(repeats ? "Repeats every" : "Repeats", 12, 700, palette.sub);
-        row.addView(label, wrap(0, 0, 10, 0));
+        TextView label = text("Repeats\nevery", 10, 700, palette.sub);
+        label.setGravity(Gravity.CENTER);
+        label.setContentDescription("Repeats every");
+        row.addView(label, wrap(0, 0, 6, 0));
 
+        View intervalControl;
         if (repeats) {
-            draftRepeatEveryValid = TodoTask.parseRepeatInterval(
-                    String.valueOf(draftRepeatEvery)) > 0;
+            draftRepeatEveryValid = TodoTask.parseRepeatInterval(draftRepeatEveryText) > 0;
             EditText every = new EditText(this);
-            every.setText(String.valueOf(Math.max(1, draftRepeatEvery)));
+            every.setText(draftRepeatEveryText);
             every.setInputType(InputType.TYPE_CLASS_NUMBER);
             every.setImeOptions(EditorInfo.IME_ACTION_DONE);
             every.setTextSize(13);
@@ -2650,31 +2654,52 @@ public final class MainActivity extends Activity {
             every.setSingleLine(true);
             every.setPadding(dp(8), 0, dp(8), 0);
             every.setBackground(repeatControlBackground());
+            every.setError(draftRepeatEveryValid ? null : "Enter 1-999");
+            every.setContentDescription(draftRepeatEveryValid
+                    ? "Repeat interval: " + draftRepeatEveryText
+                    : "Repeat interval: invalid. Enter 1 to 999.");
             every.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                    draftRepeatEveryText = s.toString();
                     int parsed = TodoTask.parseRepeatInterval(s.toString());
                     draftRepeatEveryValid = parsed > 0;
                     if (draftRepeatEveryValid) {
                         draftRepeatEvery = parsed;
                     }
                     every.setError(draftRepeatEveryValid ? null : "Enter 1-999");
+                    every.setContentDescription(draftRepeatEveryValid
+                            ? "Repeat interval: " + parsed
+                            : "Repeat interval: invalid. Enter 1 to 999.");
                     updateCommitButtonState();
                 }
                 @Override public void afterTextChanged(Editable s) { }
             });
-            LinearLayout.LayoutParams everyParams = new LinearLayout.LayoutParams(dp(56), dp(44));
-            everyParams.rightMargin = dp(8);
-            row.addView(every, everyParams);
+            intervalControl = every;
+        } else {
+            draftRepeatEveryValid = true;
+            TextView every = text(draftRepeatEveryText, 13, 700, palette.sub);
+            every.setGravity(Gravity.CENTER);
+            every.setAlpha(0.55f);
+            every.setBackground(repeatControlBackground());
+            every.setContentDescription(
+                    "Repeat interval: disabled until a repeat unit is selected");
+            intervalControl = every;
         }
+        LinearLayout.LayoutParams everyParams = new LinearLayout.LayoutParams(dp(48), dp(44));
+        everyParams.rightMargin = dp(6);
+        row.addView(intervalControl, everyParams);
 
         RepeatOption selected = repeatOption(draftRepeatUnit);
-        TextView unit = text(selected.label + "  ▾", 13, 700, palette.ink);
+        TextView unit = text(selected.label + "  ▾", 12, 700, palette.ink);
         unit.setGravity(Gravity.CENTER);
+        unit.setSingleLine(true);
+        unit.setEllipsize(TextUtils.TruncateAt.END);
+        unit.setMinWidth(dp(64));
         unit.setMinHeight(dp(44));
-        unit.setPadding(dp(12), 0, dp(12), 0);
+        unit.setPadding(dp(8), 0, dp(8), 0);
         unit.setBackground(repeatControlBackground());
-        unit.setContentDescription("Repeat interval: " + selected.label
+        unit.setContentDescription("Repeat unit: " + selected.label
                 + ". Double tap to change.");
         unit.setOnClickListener(v -> {
             PopupMenu menu = new PopupMenu(this, unit);
@@ -2686,6 +2711,7 @@ public final class MainActivity extends Activity {
                 draftRepeatEveryValid = true;
                 if (TodoTask.REPEAT_NONE.equals(draftRepeatUnit)) {
                     draftRepeatEvery = 1;
+                    draftRepeatEveryText = "1";
                 }
                 updateSheetDynamic();
                 return true;
