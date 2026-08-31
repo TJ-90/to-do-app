@@ -1,6 +1,7 @@
 const IMPACT_VALUES = Object.freeze({ H: 900, M: 600, L: 300 });
 const EFFORT_VALUES = Object.freeze({ H: 30, M: 20, L: 10 });
 const IMPACT_RANKS = Object.freeze({ H: 3, M: 2, L: 1 });
+const REPEAT_UNITS = Object.freeze(["none", "hour", "day", "week", "month", "year"]);
 
 export function scoreTask(task) {
   const impact = IMPACT_VALUES[task.impact] ?? IMPACT_VALUES.H;
@@ -70,9 +71,86 @@ export function normalizeTask(value, now = Date.now()) {
     createdAt,
     updatedAt,
     reminderAt: timestampOr(value.reminderAt, 0),
-    reminderRepeatUnit: enumOr(value.reminderRepeatUnit, ["none", "day", "week", "month"], "none"),
+    reminderRepeatUnit: enumOr(
+      value.reminderRepeatUnit,
+      REPEAT_UNITS,
+      "none"
+    ),
     reminderRepeatEvery: Math.max(1, Math.trunc(numberOr(value.reminderRepeatEvery, 1)))
   };
+}
+
+export function recurringSuccessorId(taskId) {
+  return `${taskId}:next`;
+}
+
+export function nextRecurringOccurrence(task, completedAt, mutationTimestamp) {
+  const unit = enumOr(task.reminderRepeatUnit, REPEAT_UNITS, null);
+  const reminderAt = timestampOr(task.reminderAt, 0);
+  if (!unit || unit === "none" || reminderAt === 0) return null;
+
+  const every = Math.max(1, Math.trunc(numberOr(task.reminderRepeatEvery, 1)));
+  const nextAt = new Date(Math.max(reminderAt, timestampOr(completedAt, 0)));
+  if (unit === "hour") nextAt.setHours(nextAt.getHours() + every);
+  if (unit === "day") nextAt.setDate(nextAt.getDate() + every);
+  if (unit === "week") nextAt.setDate(nextAt.getDate() + (7 * every));
+  if (unit === "month") addCalendarMonths(nextAt, every);
+  if (unit === "year") addCalendarYears(nextAt, every);
+
+  return normalizeTask({
+    ...task,
+    id: recurringSuccessorId(task.id),
+    completed: false,
+    snoozed: false,
+    createdAt: mutationTimestamp,
+    updatedAt: mutationTimestamp,
+    reminderAt: nextAt.getTime(),
+    reminderRepeatUnit: unit,
+    reminderRepeatEvery: every
+  });
+}
+
+export function completeTaskState(state, id, completedAt, mutationTimestamp) {
+  const task = state.tasks.find((value) => value.id === id);
+  if (!task || task.completed) return state;
+
+  const successor = nextRecurringOccurrence(task, completedAt, mutationTimestamp);
+  const tasks = state.tasks.map((value) => value.id === id
+    ? { ...value, completed: true, snoozed: false, updatedAt: mutationTimestamp }
+    : value);
+  if (successor) {
+    const existingIndex = tasks.findIndex((value) => value.id === successor.id);
+    if (existingIndex >= 0) tasks[existingIndex] = successor;
+    else tasks.push(successor);
+  }
+  return { ...state, tasks };
+}
+
+export function reopenTaskState(state, id, mutationTimestamp) {
+  const task = state.tasks.find((value) => value.id === id);
+  if (!task || !task.completed) return state;
+
+  const successorId = recurringSuccessorId(id);
+  const recurring = nextRecurringOccurrence(task, task.reminderAt, mutationTimestamp) !== null;
+  const tasks = state.tasks
+    .filter((value) => !recurring || value.id !== successorId)
+    .map((value) => value.id === id
+      ? { ...value, completed: false, updatedAt: mutationTimestamp }
+      : value);
+  if (!recurring) return { ...state, tasks };
+
+  const taskTombstones = [...state.taskTombstones];
+  const existingIndex = taskTombstones.findIndex((value) => value.id === successorId);
+  if (existingIndex >= 0) {
+    const existing = taskTombstones[existingIndex];
+    taskTombstones[existingIndex] = {
+      ...existing,
+      deletedAt: Math.max(existing.deletedAt, mutationTimestamp)
+    };
+  } else {
+    taskTombstones.push({ id: successorId, deletedAt: mutationTimestamp });
+  }
+  return { ...state, tasks, taskTombstones };
 }
 
 export function validateSyncState(value) {
@@ -123,4 +201,19 @@ function stringOr(value, fallback) {
 
 function enumOr(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
+}
+
+function addCalendarMonths(date, count) {
+  const day = date.getDate();
+  date.setDate(1);
+  date.setMonth(date.getMonth() + count);
+  date.setDate(Math.min(day, daysInMonth(date.getFullYear(), date.getMonth())));
+}
+
+function addCalendarYears(date, count) {
+  addCalendarMonths(date, count * 12);
+}
+
+function daysInMonth(year, month) {
+  return new Date(year, month + 1, 0).getDate();
 }

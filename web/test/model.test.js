@@ -3,8 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   bucketForTask,
+  completeTaskState,
+  nextRecurringOccurrence,
   hasSameSyncState,
   nextMutationTimestamp,
+  normalizeTask,
+  recurringSuccessorId,
+  reopenTaskState,
   scoreTask,
   shouldApplySyncResponse,
   sortTasks
@@ -78,4 +83,95 @@ test("mutation timestamps use wall-clock time when it is ahead", () => {
   };
 
   assert.equal(nextMutationTimestamp(state, 20_000), 20_000);
+});
+
+test("sync normalization preserves hourly and yearly reminder repeats", () => {
+  const base = { id: "task", title: "Recurring", createdAt: 1, updatedAt: 2 };
+
+  assert.equal(normalizeTask({ ...base, reminderRepeatUnit: "hour" }).reminderRepeatUnit, "hour");
+  assert.equal(normalizeTask({ ...base, reminderRepeatUnit: "year" }).reminderRepeatUnit, "year");
+});
+
+test("completion creates a matching occurrence two days later", () => {
+  const completedAt = new Date(2026, 7, 31, 13, 0, 0).getTime();
+  const next = nextRecurringOccurrence({
+    id: "current",
+    title: "Fix shower head",
+    notes: "Buy a washer",
+    impact: "M",
+    effort: "L",
+    category: "Home",
+    urgent: true,
+    quickTask: true,
+    snoozed: true,
+    completed: false,
+    reminderAt: new Date(2026, 7, 31, 9, 0, 0).getTime(),
+    reminderRepeatUnit: "day",
+    reminderRepeatEvery: 2,
+    createdAt: 1,
+    updatedAt: 2
+  }, completedAt, completedAt + 1);
+
+  assert.equal(next.id, "current:next");
+  assert.equal(next.title, "Fix shower head");
+  assert.equal(next.notes, "Buy a washer");
+  assert.equal(next.category, "Home");
+  assert.equal(next.completed, false);
+  assert.equal(next.snoozed, false);
+  assert.equal(next.createdAt, completedAt + 1);
+  assert.equal(next.updatedAt, completedAt + 1);
+  assert.equal(next.reminderAt, new Date(2026, 8, 2, 13, 0, 0).getTime());
+});
+
+test("monthly and yearly occurrences clamp to the target calendar month", () => {
+  const task = {
+    id: "current",
+    title: "Calendar edge",
+    reminderRepeatEvery: 1,
+    createdAt: 1,
+    updatedAt: 2
+  };
+  const january31 = new Date(2025, 0, 31, 10, 0, 0).getTime();
+  const leapDay = new Date(2024, 1, 29, 10, 0, 0).getTime();
+
+  const monthly = nextRecurringOccurrence({
+    ...task,
+    reminderAt: january31,
+    reminderRepeatUnit: "month"
+  }, january31, january31 + 1);
+  const yearly = nextRecurringOccurrence({
+    ...task,
+    reminderAt: leapDay,
+    reminderRepeatUnit: "year"
+  }, leapDay, leapDay + 1);
+
+  assert.equal(monthly.reminderAt, new Date(2025, 1, 28, 10, 0, 0).getTime());
+  assert.equal(yearly.reminderAt, new Date(2025, 1, 28, 10, 0, 0).getTime());
+});
+
+test("complete, reopen, and recomplete reuse one deterministic successor", () => {
+  const parent = normalizeTask({
+    id: "series",
+    title: "Water plants",
+    reminderAt: 1_000,
+    reminderRepeatUnit: "day",
+    reminderRepeatEvery: 1,
+    createdAt: 1,
+    updatedAt: 2
+  });
+  const initial = { tasks: [parent], taskTombstones: [], categories: [] };
+
+  const completed = completeTaskState(initial, parent.id, 1_000, 10);
+  assert.equal(completed.tasks.find((task) => task.id === parent.id).completed, true);
+  assert.deepEqual(completed.tasks.map((task) => task.id).sort(), ["series", "series:next"]);
+
+  const reopened = reopenTaskState(completed, parent.id, 11);
+  assert.equal(reopened.tasks.find((task) => task.id === parent.id).completed, false);
+  assert.deepEqual(reopened.tasks.map((task) => task.id), ["series"]);
+  assert.deepEqual(reopened.taskTombstones, [{ id: "series:next", deletedAt: 11 }]);
+
+  const recompleted = completeTaskState(reopened, parent.id, 1_000, 12);
+  assert.deepEqual(recompleted.tasks.map((task) => task.id).sort(), ["series", "series:next"]);
+  assert.equal(recompleted.tasks.find((task) => task.id === "series:next").updatedAt, 12);
+  assert.equal(recurringSuccessorId(parent.id), "series:next");
 });

@@ -111,6 +111,38 @@ public final class SyncStateTest {
     }
 
     @Test
+    public void recurringCompletionAndUndoKeepDeterministicSyncShape() throws Exception {
+        TodoTask parent = new TodoTask();
+        parent.id = "series";
+        parent.title = "Recurring";
+        parent.reminderAt = 100L;
+        parent.reminderRepeatUnit = TodoTask.REPEAT_HOUR;
+        TodoTask successor = parent.completeAndCreateNextOccurrence(100L, 200L);
+        SyncState completedState = new SyncState(
+                Arrays.asList(parent, successor), Arrays.asList(), Arrays.asList());
+
+        SyncState completedRestored = SyncState.fromJson(completedState.toJson());
+
+        assertTrue(completedRestored.tasks.get(0).completed);
+        assertEquals("series:next", completedRestored.tasks.get(1).id);
+        assertFalse(completedRestored.tasks.get(1).completed);
+
+        parent.reopenAfterCompletion(202L);
+        SyncState state = new SyncState(
+                Arrays.asList(parent),
+                Arrays.asList(new SyncState.TaskTombstone(successor.id, 201L)),
+                Arrays.asList());
+
+        SyncState restored = SyncState.fromJson(state.toJson());
+
+        assertEquals("series:next", successor.id);
+        assertFalse(restored.tasks.get(0).completed);
+        assertEquals(202L, restored.tasks.get(0).updatedAt);
+        assertEquals("series:next", restored.taskTombstones.get(0).id);
+        assertEquals(201L, restored.taskTombstones.get(0).deletedAt);
+    }
+
+    @Test
     public void wireEqualityDetectsIdenticalAndChangedState() throws Exception {
         TodoTask first = new TodoTask();
         first.id = "same";

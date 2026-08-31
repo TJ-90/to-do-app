@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { maxObservedTimestamp, mergeState, normalizeState } from "../lib/store.js";
+import { completeTaskState, reopenTaskState } from "../public/model.js";
 
 test("merge is last-write-wins for tasks and retains the newest tombstone", () => {
   const current = {
@@ -77,4 +78,49 @@ test("a monotonic client timestamp lets a slow-clock delete supersede the observ
 
   assert.deepEqual(merged.tasks, []);
   assert.deepEqual(merged.taskTombstones, [{ id: "a", deletedAt: 10_001 }]);
+});
+
+test("concurrent recurring completions converge on one successor", () => {
+  const parent = {
+    id: "daily",
+    title: "Daily task",
+    completed: false,
+    reminderAt: 1_000,
+    reminderRepeatUnit: "day",
+    reminderRepeatEvery: 1,
+    createdAt: 1,
+    updatedAt: 2
+  };
+  const base = { tasks: [parent], taskTombstones: [], categories: [] };
+  const android = completeTaskState(base, parent.id, 2_000, 10);
+  const browser = completeTaskState(base, parent.id, 2_000, 11);
+
+  const merged = mergeState(android, browser);
+
+  assert.equal(merged.tasks.filter((task) => task.id === "daily:next").length, 1);
+  assert.equal(merged.tasks.find((task) => task.id === "daily:next").updatedAt, 11);
+});
+
+test("recurring undo tombstone removes the successor after sync", () => {
+  const completed = completeTaskState({
+    tasks: [{
+      id: "weekly",
+      title: "Weekly task",
+      completed: false,
+      reminderAt: 1_000,
+      reminderRepeatUnit: "week",
+      reminderRepeatEvery: 1,
+      createdAt: 1,
+      updatedAt: 2
+    }],
+    taskTombstones: [],
+    categories: []
+  }, "weekly", 2_000, 10);
+  const reopened = reopenTaskState(completed, "weekly", 11);
+
+  const merged = mergeState(completed, reopened);
+
+  assert.deepEqual(merged.tasks.map((task) => task.id), ["weekly"]);
+  assert.equal(merged.tasks[0].completed, false);
+  assert.deepEqual(merged.taskTombstones, [{ id: "weekly:next", deletedAt: 11 }]);
 });

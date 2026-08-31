@@ -24,14 +24,12 @@ public final class ReminderReceiver extends BroadcastReceiver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
-            rescheduleRecurringReminder(context, id);
             return;
         }
 
         NotificationManager manager =
                 (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) {
-            rescheduleRecurringReminder(context, id);
             return;
         }
         createChannel(context, manager);
@@ -69,7 +67,6 @@ public final class ReminderReceiver extends BroadcastReceiver {
 
         int notificationId = id == null ? 0 : id.hashCode();
         manager.notify(notificationId, notification);
-        rescheduleRecurringReminder(context, id);
     }
 
     static void createChannel(Context context, NotificationManager manager) {
@@ -85,26 +82,4 @@ public final class ReminderReceiver extends BroadcastReceiver {
         manager.createNotificationChannel(channel);
     }
 
-    private void rescheduleRecurringReminder(Context context, String taskId) {
-        if (taskId == null) {
-            return;
-        }
-
-        TaskStore store = new TaskStore(context);
-        SyncState state = store.loadSyncState();
-        for (TodoTask task : state.tasks) {
-            if (!taskId.equals(task.id) || task.completed || !task.repeatsReminder()) {
-                continue;
-            }
-
-            long nextReminder = task.nextReminderAfter(System.currentTimeMillis());
-            if (nextReminder > 0) {
-                task.reminderAt = nextReminder;
-                task.updatedAt = state.nextMutationTimestamp(System.currentTimeMillis());
-                store.saveSyncState(state);
-                ReminderScheduler.schedule(context, task);
-            }
-            return;
-        }
-    }
 }

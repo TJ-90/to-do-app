@@ -12,9 +12,11 @@ final class TodoTask {
     static final String MEDIUM = "M";
     static final String LOW = "L";
     static final String REPEAT_NONE = "none";
+    static final String REPEAT_HOUR = "hour";
     static final String REPEAT_DAY = "day";
     static final String REPEAT_WEEK = "week";
     static final String REPEAT_MONTH = "month";
+    static final String REPEAT_YEAR = "year";
 
     String id = UUID.randomUUID().toString();
     String title = "";
@@ -118,18 +120,68 @@ final class TodoTask {
                 && !REPEAT_NONE.equals(reminderRepeatUnit);
     }
 
-    long nextReminderAfter(long now) {
+    TodoTask nextOccurrenceAfterCompletion(long completedAt, long mutationTimestamp) {
         if (!repeatsReminder()) {
-            return 0;
+            return null;
         }
 
         Calendar calendar = Calendar.getInstance();
-        calendar.setTimeInMillis(reminderAt);
-        int field = repeatCalendarField(reminderRepeatUnit);
-        while (calendar.getTimeInMillis() <= now) {
-            calendar.add(field, reminderRepeatEvery);
+        calendar.setTimeInMillis(Math.max(reminderAt, completedAt));
+        calendar.add(repeatCalendarField(reminderRepeatUnit), reminderRepeatEvery);
+
+        TodoTask next = new TodoTask();
+        next.id = recurringSuccessorId();
+        next.title = title;
+        next.notes = notes;
+        next.impact = impact;
+        next.effort = effort;
+        next.dependency = dependency;
+        next.category = category;
+        next.urgent = urgent;
+        next.quickTask = quickTask;
+        next.recurringMit = recurringMit;
+        next.createdAt = mutationTimestamp;
+        next.updatedAt = mutationTimestamp;
+        next.reminderAt = calendar.getTimeInMillis();
+        next.reminderRepeatUnit = reminderRepeatUnit;
+        next.reminderRepeatEvery = reminderRepeatEvery;
+        return next;
+    }
+
+    TodoTask completeAndCreateNextOccurrence(long completedAt, long mutationTimestamp) {
+        if (completed) {
+            return null;
         }
-        return calendar.getTimeInMillis();
+        TodoTask next = nextOccurrenceAfterCompletion(completedAt, mutationTimestamp);
+        completed = true;
+        snoozed = false;
+        updatedAt = mutationTimestamp;
+        return next;
+    }
+
+    void reopenAfterCompletion(long mutationTimestamp) {
+        completed = false;
+        updatedAt = mutationTimestamp;
+    }
+
+    String recurringSuccessorId() {
+        return id + ":next";
+    }
+
+    static int parseRepeatInterval(String value) {
+        if (value == null) {
+            return 0;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed >= 1 && parsed <= 999 ? parsed : 0;
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    static boolean shouldClearExpiredReminder(long reminderAt, String repeatUnit, long now) {
+        return reminderAt > 0 && reminderAt <= now && REPEAT_NONE.equals(repeatUnit);
     }
 
     String recurrenceLabel() {
@@ -141,6 +193,9 @@ final class TodoTask {
     }
 
     static String normalizeRepeatUnit(String value) {
+        if (REPEAT_HOUR.equals(value) || "hourly".equals(value)) {
+            return REPEAT_HOUR;
+        }
         if (REPEAT_DAY.equals(value) || "daily".equals(value)) {
             return REPEAT_DAY;
         }
@@ -149,6 +204,9 @@ final class TodoTask {
         }
         if (REPEAT_MONTH.equals(value) || "monthly".equals(value)) {
             return REPEAT_MONTH;
+        }
+        if (REPEAT_YEAR.equals(value) || "yearly".equals(value)) {
+            return REPEAT_YEAR;
         }
         return REPEAT_NONE;
     }
@@ -184,21 +242,33 @@ final class TodoTask {
     }
 
     private static int repeatCalendarField(String unit) {
+        if (REPEAT_YEAR.equals(unit)) {
+            return Calendar.YEAR;
+        }
         if (REPEAT_MONTH.equals(unit)) {
             return Calendar.MONTH;
         }
         if (REPEAT_WEEK.equals(unit)) {
             return Calendar.WEEK_OF_YEAR;
         }
+        if (REPEAT_HOUR.equals(unit)) {
+            return Calendar.HOUR_OF_DAY;
+        }
         return Calendar.DAY_OF_YEAR;
     }
 
     private static String repeatUnitLabel(String unit, int every) {
+        if (REPEAT_YEAR.equals(unit)) {
+            return every == 1 ? "year" : "years";
+        }
         if (REPEAT_MONTH.equals(unit)) {
             return every == 1 ? "month" : "months";
         }
         if (REPEAT_WEEK.equals(unit)) {
             return every == 1 ? "week" : "weeks";
+        }
+        if (REPEAT_HOUR.equals(unit)) {
+            return every == 1 ? "hour" : "hours";
         }
         return every == 1 ? "day" : "days";
     }

@@ -43,8 +43,6 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -52,7 +50,6 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.text.DateFormat;
@@ -94,7 +91,14 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_EXPORT_CSV = 21;
     private static final int REQUEST_IMPORT_CSV = 22;
 
-    private static final String[] REPEAT_UNITS = {"No repeat", "Day", "Week", "Month"};
+    private static final RepeatOption[] REPEAT_OPTIONS = {
+            new RepeatOption(TodoTask.REPEAT_NONE, "No repeat"),
+            new RepeatOption(TodoTask.REPEAT_HOUR, "Hours"),
+            new RepeatOption(TodoTask.REPEAT_DAY, "Days"),
+            new RepeatOption(TodoTask.REPEAT_WEEK, "Weeks"),
+            new RepeatOption(TodoTask.REPEAT_MONTH, "Months"),
+            new RepeatOption(TodoTask.REPEAT_YEAR, "Years")
+    };
 
     private static final int[] CONFETTI_COLORS = {
             0xFF008135, 0xFF3D9C5E, 0xFF59AD73, 0xFF60C781, 0xFF9FE4B1, 0xFFFFFFFF
@@ -145,8 +149,7 @@ public final class MainActivity extends Activity {
 
     private View toastView;
     private Runnable toastDismiss;
-    private String toastTaskId;
-    private String toastActionType;
+    private Runnable toastUndoAction;
 
     private View cheerView;
     private Runnable cheerDismiss;
@@ -164,6 +167,7 @@ public final class MainActivity extends Activity {
     private long draftReminderAt;
     private String draftRepeatUnit = TodoTask.REPEAT_NONE;
     private int draftRepeatEvery = 1;
+    private boolean draftRepeatEveryValid = true;
     private boolean detailsExpanded;
     private boolean notesExpanded;
 
@@ -178,7 +182,7 @@ public final class MainActivity extends Activity {
     private TextView landsPill;
     private TextView detailsSummary;
     private TextView detailsToggle;
-    private TextView remindChip;
+    private ReminderClockButton remindChip;
     private TextView remindClear;
     private ValueAnimator adjustPulse;
     private LinearLayout reminderRepeatRow;
@@ -209,7 +213,7 @@ public final class MainActivity extends Activity {
         replaceSyncState(store.loadSyncState());
         requestNotificationPermission();
         createNotificationChannel();
-        rescheduleFutureReminders();
+        scheduleTaskReminders();
         buildChrome();
         renderAll(false);
         maybeShowOnboarding();
@@ -701,7 +705,7 @@ public final class MainActivity extends Activity {
 
     private void applyAuthoritativeSyncState(SyncState state) {
         if (currentSyncState().hasSameWireState(state)) {
-            rescheduleFutureReminders();
+            scheduleTaskReminders();
             return;
         }
         for (TodoTask task : tasks) {
@@ -718,7 +722,7 @@ public final class MainActivity extends Activity {
             }
         }
         store.saveSyncState(currentSyncState());
-        rescheduleFutureReminders();
+        scheduleTaskReminders();
         renderAll(false);
     }
 
@@ -1354,13 +1358,18 @@ public final class MainActivity extends Activity {
         if (task == null || task.completed) {
             return;
         }
-        task.completed = true;
-        task.snoozed = false;
-        task.updatedAt = nextMutationTimestamp();
+        long completedAt = System.currentTimeMillis();
+        long mutationTimestamp = nextMutationTimestamp();
+        TodoTask nextOccurrence = task.completeAndCreateNextOccurrence(completedAt, mutationTimestamp);
         ReminderScheduler.cancel(this, task);
+        if (nextOccurrence != null) {
+            tasks.add(nextOccurrence);
+            ReminderScheduler.schedule(this, nextOccurrence);
+        }
         persistMutation();
         renderAll(true);
-        showToast("Completed", "complete", id);
+        String generatedTaskId = nextOccurrence == null ? null : nextOccurrence.id;
+        showToast("Completed", () -> undoCompletion(id, generatedTaskId));
     }
 
     private void laterTask(String id) {
@@ -1372,34 +1381,44 @@ public final class MainActivity extends Activity {
         task.updatedAt = nextMutationTimestamp();
         persistMutation();
         renderAll(true);
-        showToast("Moved to Later", "later", id);
+        showToast("Moved to Later", () -> undoLater(id));
     }
 
-    private void undoLast() {
-        if (toastTaskId == null) {
+    private void undoCompletion(String taskId, String generatedTaskId) {
+        TodoTask task = findTask(taskId);
+        if (task == null) {
             return;
         }
-        TodoTask task = findTask(toastTaskId);
-        if (task != null) {
-            if ("complete".equals(toastActionType)) {
-                task.completed = false;
-                ReminderScheduler.schedule(this, task);
-            } else {
-                task.snoozed = false;
+        if (generatedTaskId != null) {
+            TodoTask generated = findTask(generatedTaskId);
+            if (generated != null) {
+                ReminderScheduler.cancel(this, generated);
+                tasks.remove(generated);
             }
-            task.updatedAt = nextMutationTimestamp();
-            persistMutation();
-            renderAll(true);
+            recordTaskTombstone(generatedTaskId, nextMutationTimestamp());
         }
-        dismissToast();
+        task.reopenAfterCompletion(nextMutationTimestamp());
+        ReminderScheduler.schedule(this, task);
+        persistMutation();
+        renderAll(true);
+    }
+
+    private void undoLater(String taskId) {
+        TodoTask task = findTask(taskId);
+        if (task == null) {
+            return;
+        }
+        task.snoozed = false;
+        task.updatedAt = nextMutationTimestamp();
+        persistMutation();
+        renderAll(true);
     }
 
     // ===================== toast / cheer =====================
 
-    private void showToast(String msg, String type, String id) {
+    private void showToast(String msg, Runnable undoAction) {
         dismissToast();
-        toastTaskId = id;
-        toastActionType = type;
+        toastUndoAction = undoAction;
 
         LinearLayout bar = horizontal();
         bar.setPadding(dp(16), dp(11), dp(12), dp(11));
@@ -1412,7 +1431,13 @@ public final class MainActivity extends Activity {
         bar.addView(label, wrap(0, 0, 16, 0));
         TextView undo = text("Undo", 13, 800, 0xFFA3A9FF);
         undo.setPadding(dp(4), dp(2), dp(4), dp(2));
-        undo.setOnClickListener(v -> undoLast());
+        undo.setOnClickListener(v -> {
+            Runnable action = toastUndoAction;
+            if (action != null) {
+                action.run();
+            }
+            dismissToast();
+        });
         bar.addView(undo, wrap(0, 0, 0, 0));
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
@@ -1435,8 +1460,7 @@ public final class MainActivity extends Activity {
             root.removeView(toastView);
             toastView = null;
         }
-        toastTaskId = null;
-        toastActionType = null;
+        toastUndoAction = null;
     }
 
     private void showCheer(String msg) {
@@ -1827,7 +1851,7 @@ public final class MainActivity extends Activity {
             }
             int changed = mergeImportedTasks(CsvCodec.importTasks(csv.toString()));
             persistMutation();
-            rescheduleFutureReminders();
+            scheduleTaskReminders();
             renderAll(false);
             showCheer(changed + " tasks imported");
         } catch (IOException | NullPointerException ex) {
@@ -1920,6 +1944,7 @@ public final class MainActivity extends Activity {
         draftReminderAt = 0;
         draftRepeatUnit = TodoTask.REPEAT_NONE;
         draftRepeatEvery = 1;
+        draftRepeatEveryValid = true;
         draftCategory = "All".equals(activeCat) ? null : activeCat;
         detailsExpanded = false;
         notesExpanded = false;
@@ -1942,6 +1967,8 @@ public final class MainActivity extends Activity {
         draftReminderAt = task.reminderAt;
         draftRepeatUnit = task.reminderRepeatUnit;
         draftRepeatEvery = Math.max(1, task.reminderRepeatEvery);
+        draftRepeatEveryValid = TodoTask.parseRepeatInterval(
+                String.valueOf(task.reminderRepeatEvery)) > 0;
         draftCategory = task.category;
         detailsExpanded = false;
         notesExpanded = shouldExpandNotes(sheetMode, draftNotes);
@@ -2148,9 +2175,8 @@ public final class MainActivity extends Activity {
         content.addView(notesInput, matchWrap(0, 0, 0, 0));
 
         LinearLayout reminderRow = horizontal();
-        remindChip = text("", 13, 700, palette.sub);
-        remindChip.setGravity(Gravity.CENTER_VERTICAL);
-        remindChip.setPadding(dp(14), dp(10), dp(14), dp(10));
+        reminderRow.setGravity(Gravity.CENTER_VERTICAL);
+        remindChip = new ReminderClockButton();
         remindChip.setOnClickListener(v -> openReminderPicker());
         reminderRow.addView(remindChip, wrap(0, 0, 8, 0));
         remindClear = text("Clear", 12, 700, palette.sub);
@@ -2165,6 +2191,7 @@ public final class MainActivity extends Activity {
             draftReminderAt = 0;
             draftRepeatUnit = TodoTask.REPEAT_NONE;
             draftRepeatEvery = 1;
+            draftRepeatEveryValid = true;
             updateSheetDynamic();
         });
         reminderRow.addView(remindClear, wrap(0, 0, 0, 0));
@@ -2368,7 +2395,10 @@ public final class MainActivity extends Activity {
         styleListPill();
 
         boolean hasReminder = draftReminderAt > 0;
-        remindChip.setText(hasReminder ? "⏰  " + reminderShortFromMillis(draftReminderAt) : "⏰  Add reminder");
+        remindChip.setContentDescription(hasReminder
+                ? "Reminder set for " + reminderShortFromMillis(draftReminderAt)
+                        + ". Double tap to change."
+                : "Set reminder");
         styleReminderChip(hasReminder);
         if (remindClear != null) {
             remindClear.setVisibility(hasReminder ? View.VISIBLE : View.GONE);
@@ -2394,7 +2424,12 @@ public final class MainActivity extends Activity {
             }
         }
 
-        boolean ready = draftName.trim().length() > 0;
+        updateCommitButtonState();
+    }
+
+    private void updateCommitButtonState() {
+        boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
+        boolean ready = draftName.trim().length() > 0 && (!repeats || draftRepeatEveryValid);
         commitButton.setText("edit".equals(sheetMode) ? "Save" : "Add task");
         commitButton.setAlpha(ready ? 1f : 0.4f);
         commitButton.setEnabled(ready);
@@ -2466,17 +2501,15 @@ public final class MainActivity extends Activity {
         if (remindChip == null) {
             return;
         }
-        applyFont(remindChip, 700);
+        remindChip.setActive(active);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(12));
         if (active) {
             bg.setColor(PriorityPalette.withAlpha(palette.accent, 0x1F));
             bg.setStroke(dp(2), palette.accent);
-            remindChip.setTextColor(palette.accent);
         } else {
             bg.setColor(palette.bg);
             bg.setStroke(dp(2), palette.line);
-            remindChip.setTextColor(palette.sub);
         }
         remindChip.setBackground(bg);
     }
@@ -2597,34 +2630,77 @@ public final class MainActivity extends Activity {
     }
 
     private void buildRepeatControls(LinearLayout row) {
-        Spinner unit = new Spinner(this);
-        unit.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, REPEAT_UNITS));
-        unit.setSelection(repeatUnitIndex(draftRepeatUnit));
-        unit.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                draftRepeatUnit = repeatUnitFromIndex(position);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) { }
-        });
-        row.addView(unit, weight(1, 0, 0, 8, 0));
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
 
-        EditText every = new EditText(this);
-        every.setText(String.valueOf(Math.max(1, draftRepeatEvery)));
-        every.setInputType(InputType.TYPE_CLASS_NUMBER);
-        every.setTextColor(palette.ink);
-        every.setSingleLine(true);
-        every.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
-                try {
-                    draftRepeatEvery = Math.max(1, Integer.parseInt(s.toString().trim()));
-                } catch (NumberFormatException ignored) {
+        TextView label = text(repeats ? "Repeats every" : "Repeats", 12, 700, palette.sub);
+        row.addView(label, wrap(0, 0, 10, 0));
+
+        if (repeats) {
+            draftRepeatEveryValid = TodoTask.parseRepeatInterval(
+                    String.valueOf(draftRepeatEvery)) > 0;
+            EditText every = new EditText(this);
+            every.setText(String.valueOf(Math.max(1, draftRepeatEvery)));
+            every.setInputType(InputType.TYPE_CLASS_NUMBER);
+            every.setImeOptions(EditorInfo.IME_ACTION_DONE);
+            every.setTextSize(13);
+            every.setTextColor(palette.ink);
+            every.setGravity(Gravity.CENTER);
+            every.setSelectAllOnFocus(true);
+            every.setSingleLine(true);
+            every.setPadding(dp(8), 0, dp(8), 0);
+            every.setBackground(repeatControlBackground());
+            every.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
+                    int parsed = TodoTask.parseRepeatInterval(s.toString());
+                    draftRepeatEveryValid = parsed > 0;
+                    if (draftRepeatEveryValid) {
+                        draftRepeatEvery = parsed;
+                    }
+                    every.setError(draftRepeatEveryValid ? null : "Enter 1-999");
+                    updateCommitButtonState();
+                }
+                @Override public void afterTextChanged(Editable s) { }
+            });
+            LinearLayout.LayoutParams everyParams = new LinearLayout.LayoutParams(dp(56), dp(44));
+            everyParams.rightMargin = dp(8);
+            row.addView(every, everyParams);
+        }
+
+        RepeatOption selected = repeatOption(draftRepeatUnit);
+        TextView unit = text(selected.label + "  ▾", 13, 700, palette.ink);
+        unit.setGravity(Gravity.CENTER);
+        unit.setMinHeight(dp(44));
+        unit.setPadding(dp(12), 0, dp(12), 0);
+        unit.setBackground(repeatControlBackground());
+        unit.setContentDescription("Repeat interval: " + selected.label
+                + ". Double tap to change.");
+        unit.setOnClickListener(v -> {
+            PopupMenu menu = new PopupMenu(this, unit);
+            for (int index = 0; index < REPEAT_OPTIONS.length; index++) {
+                menu.getMenu().add(0, index, index, REPEAT_OPTIONS[index].label);
+            }
+            menu.setOnMenuItemClickListener(item -> {
+                draftRepeatUnit = REPEAT_OPTIONS[item.getItemId()].value;
+                draftRepeatEveryValid = true;
+                if (TodoTask.REPEAT_NONE.equals(draftRepeatUnit)) {
                     draftRepeatEvery = 1;
                 }
-            }
-            @Override public void afterTextChanged(Editable s) { }
+                updateSheetDynamic();
+                return true;
+            });
+            menu.show();
         });
-        row.addView(every, new LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(unit, wrap(0, 0, 0, 0));
+    }
+
+    private GradientDrawable repeatControlBackground() {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.bg);
+        bg.setCornerRadius(dp(12));
+        bg.setStroke(dp(2), palette.line);
+        return bg;
     }
 
     private void openReminderPicker() {
@@ -2657,12 +2733,15 @@ public final class MainActivity extends Activity {
             return;
         }
         boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
+        if (repeats && !draftRepeatEveryValid) {
+            return;
+        }
         if (repeats && draftReminderAt == 0) {
             draftRepeatUnit = TodoTask.REPEAT_NONE;
         }
-        if (draftReminderAt > 0 && draftReminderAt <= System.currentTimeMillis()) {
+        if (TodoTask.shouldClearExpiredReminder(
+                draftReminderAt, draftRepeatUnit, System.currentTimeMillis())) {
             draftReminderAt = 0;
-            draftRepeatUnit = TodoTask.REPEAT_NONE;
         }
 
         TodoTask task;
@@ -2972,30 +3051,13 @@ public final class MainActivity extends Activity {
         return "Low";
     }
 
-    private int repeatUnitIndex(String unit) {
-        if (TodoTask.REPEAT_DAY.equals(unit)) {
-            return 1;
+    private RepeatOption repeatOption(String unit) {
+        for (RepeatOption option : REPEAT_OPTIONS) {
+            if (option.value.equals(unit)) {
+                return option;
+            }
         }
-        if (TodoTask.REPEAT_WEEK.equals(unit)) {
-            return 2;
-        }
-        if (TodoTask.REPEAT_MONTH.equals(unit)) {
-            return 3;
-        }
-        return 0;
-    }
-
-    private String repeatUnitFromIndex(int index) {
-        if (index == 1) {
-            return TodoTask.REPEAT_DAY;
-        }
-        if (index == 2) {
-            return TodoTask.REPEAT_WEEK;
-        }
-        if (index == 3) {
-            return TodoTask.REPEAT_MONTH;
-        }
-        return TodoTask.REPEAT_NONE;
+        return REPEAT_OPTIONS[0];
     }
 
     private TextView chipGroupLabel(String value) {
@@ -3127,23 +3189,56 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void rescheduleFutureReminders() {
-        boolean changed = false;
-        long wallNow = System.currentTimeMillis();
-        long mutationTimestamp = nextMutationTimestamp();
+    private void scheduleTaskReminders() {
         for (TodoTask task : tasks) {
-            if (!task.completed && task.repeatsReminder() && task.reminderAt <= wallNow) {
-                long next = task.nextReminderAfter(wallNow);
-                if (next > 0) {
-                    task.reminderAt = next;
-                    task.updatedAt = mutationTimestamp;
-                    changed = true;
-                }
-            }
             ReminderScheduler.schedule(this, task);
         }
-        if (changed) {
-            persistMutation();
+    }
+
+    private static final class RepeatOption {
+        final String value;
+        final String label;
+
+        RepeatOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+    }
+
+    private final class ReminderClockButton extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private boolean active;
+
+        ReminderClockButton() {
+            super(MainActivity.this);
+            setClickable(true);
+            setFocusable(true);
+        }
+
+        void setActive(boolean value) {
+            active = value;
+            invalidate();
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            setMeasuredDimension(dp(52), dp(48));
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            float radius = dp(12);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(active ? palette.accent : palette.sub);
+            canvas.drawCircle(cx, cy, radius, paint);
+            canvas.drawLine(cx, cy, cx, cy - dp(7), paint);
+            canvas.drawLine(cx, cy, cx + dp(7), cy + dp(4), paint);
         }
     }
 

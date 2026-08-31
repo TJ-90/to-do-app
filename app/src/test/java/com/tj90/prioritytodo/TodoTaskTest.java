@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -240,6 +241,114 @@ public final class TodoTaskTest {
         assertTrue(task.urgent);
         assertTrue(task.quickTask);
         assertEquals(TodoTask.REPEAT_WEEK, task.reminderRepeatUnit);
+    }
+
+    @Test
+    public void completingRecurringReminderCreatesNextOccurrenceFromCompletionTime() {
+        Calendar reminder = Calendar.getInstance();
+        reminder.set(2026, Calendar.AUGUST, 31, 9, 0, 0);
+        reminder.set(Calendar.MILLISECOND, 0);
+        Calendar completed = (Calendar) reminder.clone();
+        completed.add(Calendar.HOUR_OF_DAY, 4);
+        Calendar expectedNext = (Calendar) completed.clone();
+        expectedNext.add(Calendar.DAY_OF_YEAR, 2);
+
+        TodoTask task = new TodoTask();
+        task.title = "Fix shower head";
+        task.notes = "Buy a replacement washer";
+        task.impact = TodoTask.MEDIUM;
+        task.effort = TodoTask.LOW;
+        task.category = "Home";
+        task.urgent = true;
+        task.quickTask = true;
+        task.snoozed = true;
+        task.recurringMit = true;
+        task.reminderAt = reminder.getTimeInMillis();
+        task.reminderRepeatUnit = TodoTask.REPEAT_DAY;
+        task.reminderRepeatEvery = 2;
+
+        TodoTask next = task.completeAndCreateNextOccurrence(
+                completed.getTimeInMillis(), completed.getTimeInMillis() + 1);
+
+        assertEquals("Fix shower head", next.title);
+        assertEquals("Buy a replacement washer", next.notes);
+        assertEquals(TodoTask.MEDIUM, next.impact);
+        assertEquals(TodoTask.LOW, next.effort);
+        assertEquals("Home", next.category);
+        assertTrue(next.urgent);
+        assertTrue(next.quickTask);
+        assertTrue(next.recurringMit);
+        assertFalse(next.completed);
+        assertFalse(next.snoozed);
+        assertEquals(task.id + ":next", next.id);
+        assertTrue(task.completed);
+        assertFalse(task.snoozed);
+        assertEquals(completed.getTimeInMillis() + 1, task.updatedAt);
+        assertEquals(expectedNext.getTimeInMillis(), next.reminderAt);
+        assertEquals(TodoTask.REPEAT_DAY, next.reminderRepeatUnit);
+        assertEquals(2, next.reminderRepeatEvery);
+        assertEquals(completed.getTimeInMillis() + 1, next.createdAt);
+        assertEquals(completed.getTimeInMillis() + 1, next.updatedAt);
+
+        task.reopenAfterCompletion(completed.getTimeInMillis() + 2);
+        assertFalse(task.completed);
+        assertEquals(completed.getTimeInMillis() + 2, task.updatedAt);
+        assertEquals(next.id, task.completeAndCreateNextOccurrence(
+                completed.getTimeInMillis(), completed.getTimeInMillis() + 3).id);
+    }
+
+    @Test
+    public void recurringReminderSupportsHoursAndYears() {
+        Calendar completed = Calendar.getInstance();
+        completed.set(2024, Calendar.FEBRUARY, 29, 10, 15, 0);
+        completed.set(Calendar.MILLISECOND, 0);
+
+        TodoTask hourly = new TodoTask();
+        hourly.reminderAt = completed.getTimeInMillis();
+        hourly.reminderRepeatUnit = TodoTask.REPEAT_HOUR;
+        hourly.reminderRepeatEvery = 3;
+        Calendar expectedHour = (Calendar) completed.clone();
+        expectedHour.add(Calendar.HOUR_OF_DAY, 3);
+        assertEquals(expectedHour.getTimeInMillis(),
+                hourly.nextOccurrenceAfterCompletion(completed.getTimeInMillis(), 1).reminderAt);
+
+        TodoTask yearly = new TodoTask();
+        yearly.reminderAt = completed.getTimeInMillis();
+        yearly.reminderRepeatUnit = TodoTask.REPEAT_YEAR;
+        yearly.reminderRepeatEvery = 1;
+        Calendar expectedYear = (Calendar) completed.clone();
+        expectedYear.add(Calendar.YEAR, 1);
+        assertEquals(expectedYear.getTimeInMillis(),
+                yearly.nextOccurrenceAfterCompletion(completed.getTimeInMillis(), 1).reminderAt);
+
+        assertEquals(TodoTask.REPEAT_HOUR, TodoTask.normalizeRepeatUnit("hourly"));
+        assertEquals(TodoTask.REPEAT_YEAR, TodoTask.normalizeRepeatUnit("yearly"));
+    }
+
+    @Test
+    public void nonRepeatingReminderDoesNotCreateAnotherOccurrence() {
+        TodoTask task = new TodoTask();
+        task.reminderAt = 100L;
+
+        assertNull(task.nextOccurrenceAfterCompletion(200L, 201L));
+    }
+
+    @Test
+    public void repeatIntervalAcceptsOnlyOneThroughNineHundredNinetyNine() {
+        assertEquals(1, TodoTask.parseRepeatInterval("1"));
+        assertEquals(999, TodoTask.parseRepeatInterval("999"));
+        assertEquals(0, TodoTask.parseRepeatInterval(null));
+        assertEquals(0, TodoTask.parseRepeatInterval(""));
+        assertEquals(0, TodoTask.parseRepeatInterval("0"));
+        assertEquals(0, TodoTask.parseRepeatInterval("1000"));
+        assertEquals(0, TodoTask.parseRepeatInterval("999999999999"));
+    }
+
+    @Test
+    public void overdueEditClearsOnlyOneOffReminder() {
+        assertTrue(TodoTask.shouldClearExpiredReminder(100L, TodoTask.REPEAT_NONE, 101L));
+        assertFalse(TodoTask.shouldClearExpiredReminder(100L, TodoTask.REPEAT_DAY, 101L));
+        assertFalse(TodoTask.shouldClearExpiredReminder(102L, TodoTask.REPEAT_NONE, 101L));
     }
 
     private static double score(String impact, String effort, boolean urgent, boolean snoozed) {

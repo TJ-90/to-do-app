@@ -1,7 +1,9 @@
 import {
+  completeTaskState,
   hasSameSyncState,
   nextMutationTimestamp,
   normalizeTask,
+  reopenTaskState,
   shouldApplySyncResponse,
   sortTasks
 } from "/model.js";
@@ -151,10 +153,13 @@ function renderRows(container, tasks, ordered) {
     row.querySelector(".task-notes").textContent = task.notes;
     row.querySelector(".task-notes").hidden = !task.notes;
     row.querySelector(".complete-button").setAttribute("aria-label", task.completed ? "Mark incomplete" : "Complete task");
-    row.querySelector(".complete-button").addEventListener("click", () => updateTask(task.id, {
-      completed: !task.completed,
-      snoozed: task.completed ? task.snoozed : false
-    }));
+    row.querySelector(".complete-button").addEventListener("click", () => {
+      if (task.completed) {
+        reopenTask(task.id);
+      } else {
+        completeTask(task.id);
+      }
+    });
     row.querySelector(".task-main").addEventListener("click", () => openTaskDialog(task));
     const later = row.querySelector(".later-button");
     later.textContent = task.snoozed ? "Now" : "Later";
@@ -193,6 +198,22 @@ function refreshCategoryPicker(categories, selected = elements.category.value) {
 function updateTask(id, changes) {
   const updatedAt = nextMutationTimestamp(state);
   state.tasks = state.tasks.map((task) => task.id === id ? { ...task, ...changes, updatedAt } : task);
+  commitMutation();
+}
+
+function completeTask(id) {
+  const updatedAt = nextMutationTimestamp(state);
+  const nextState = completeTaskState(state, id, Date.now(), updatedAt);
+  if (nextState === state) return;
+  state = nextState;
+  commitMutation();
+}
+
+function reopenTask(id) {
+  const updatedAt = nextMutationTimestamp(state);
+  const nextState = reopenTaskState(state, id, updatedAt);
+  if (nextState === state) return;
+  state = nextState;
   commitMutation();
 }
 
