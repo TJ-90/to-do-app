@@ -2,9 +2,11 @@ import {
   completeTaskState,
   hasSameSyncState,
   nextMutationTimestamp,
+  nextReminderPriorityTransition,
   normalizeTask,
   reopenTaskState,
   shouldApplySyncResponse,
+  sortActiveTasks,
   sortTasks
 } from "/model.js";
 import { postSyncState } from "/sync.js";
@@ -31,6 +33,7 @@ let state = loadLocalState();
 let activeList = "All";
 let editingId = null;
 let syncTimer = null;
+let priorityTimer = null;
 let syncing = false;
 let syncQueued = false;
 let localRevision = 0;
@@ -98,8 +101,12 @@ render();
 syncNow();
 setInterval(syncNow, 5000);
 window.addEventListener("online", syncNow);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) render();
+});
 
 function render() {
+  const now = Date.now();
   const visibleCategories = state.categories.filter((category) => category.deletedAt < category.updatedAt);
   if (activeList !== "All" && !visibleCategories.some((category) => category.name === activeList)) activeList = "All";
   elements.tabs.replaceChildren();
@@ -114,10 +121,10 @@ function render() {
 
   const inList = (task) => activeList === "All" || task.category === activeList;
   const ordered = sortTasks(state.tasks.filter(inList));
-  const active = ordered.filter((task) => !task.completed && !task.snoozed);
+  const active = sortActiveTasks(ordered.filter((task) => !task.completed && !task.snoozed), now);
   const later = ordered.filter((task) => !task.completed && task.snoozed);
   const completed = ordered.filter((task) => task.completed);
-  renderRows(elements.active, active, ordered);
+  renderRows(elements.active, active, active);
   renderRows(elements.later, later, ordered);
   renderRows(elements.completed, completed, ordered);
   elements.empty.hidden = active.length !== 0;
@@ -135,6 +142,14 @@ function render() {
     notes.hidden = !active[0].notes;
   }
   refreshCategoryPicker(visibleCategories);
+  schedulePriorityRefresh(active, now);
+}
+
+function schedulePriorityRefresh(active, renderedAt) {
+  clearTimeout(priorityTimer);
+  const transition = nextReminderPriorityTransition(active, renderedAt);
+  if (transition === null) return;
+  priorityTimer = setTimeout(render, Math.max(1, Math.min(2_147_483_647, transition - Date.now())));
 }
 
 function renderRows(container, tasks, ordered) {

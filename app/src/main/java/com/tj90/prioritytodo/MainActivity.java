@@ -109,6 +109,7 @@ public final class MainActivity extends Activity {
     private final List<SyncState.CategoryState> categoryStates = new ArrayList<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable debouncedSync = () -> syncNow(false);
+    private final Runnable reminderPriorityRefresh = () -> renderAll(true);
 
     private TaskStore store;
     private PriorityPalette palette;
@@ -122,6 +123,7 @@ public final class MainActivity extends Activity {
     private boolean syncQueued;
     private boolean queuedManualSync;
     private boolean destroyed;
+    private boolean resumed;
 
     private FrameLayout root;
     private TextView headerSubView;
@@ -223,15 +225,25 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        renderAll(false);
         if (!syncBaseUrl.isEmpty()) {
             syncNow(false);
         }
     }
 
     @Override
+    protected void onPause() {
+        resumed = false;
+        handler.removeCallbacks(reminderPriorityRefresh);
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         destroyed = true;
         handler.removeCallbacks(debouncedSync);
+        handler.removeCallbacks(reminderPriorityRefresh);
         super.onDestroy();
     }
 
@@ -940,7 +952,8 @@ public final class MainActivity extends Activity {
 
     private void renderAll(boolean animateReorder) {
         sortTasks();
-        List<TodoTask> active = activeTasks();
+        long now = System.currentTimeMillis();
+        List<TodoTask> active = activeTasks(now);
         int total = 0;
         for (TodoTask t : tasks) {
             if (inActiveCat(t)) {
@@ -965,6 +978,28 @@ public final class MainActivity extends Activity {
 
         renderHero(mit, heroAccent, pct, done, total);
         renderList(active, animateReorder);
+        scheduleReminderPriorityRefresh(now);
+    }
+
+    private void scheduleReminderPriorityRefresh(long renderedAt) {
+        handler.removeCallbacks(reminderPriorityRefresh);
+        if (!resumed) {
+            return;
+        }
+        long nextTransition = Long.MAX_VALUE;
+        for (TodoTask task : tasks) {
+            if (task.completed || task.snoozed || task.reminderAt <= 0) {
+                continue;
+            }
+            long transition = task.reminderAt - TodoTask.REMINDER_PRIORITY_WINDOW_MS;
+            if (transition > renderedAt && transition < nextTransition) {
+                nextTransition = transition;
+            }
+        }
+        if (nextTransition != Long.MAX_VALUE) {
+            handler.postDelayed(reminderPriorityRefresh,
+                    Math.max(1, nextTransition - System.currentTimeMillis()));
+        }
     }
 
     private void renderHero(TodoTask mit, int accent, int pct, int done, int total) {
@@ -3148,7 +3183,7 @@ public final class MainActivity extends Activity {
 
     // ===================== model helpers =====================
 
-    private List<TodoTask> activeTasks() {
+    private List<TodoTask> activeTasks(long now) {
         List<TodoTask> out = new ArrayList<>();
         for (TodoTask task : tasks) {
             if (!task.completed && inActiveCat(task)) {
@@ -3158,11 +3193,7 @@ public final class MainActivity extends Activity {
         Collections.sort(out, new Comparator<TodoTask>() {
             @Override
             public int compare(TodoTask first, TodoTask second) {
-                int byScore = Double.compare(second.score(), first.score());
-                if (byScore != 0) {
-                    return byScore;
-                }
-                return Long.compare(first.createdAt, second.createdAt);
+                return TodoTask.compareForActiveList(first, second, now);
             }
         });
         return out;

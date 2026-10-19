@@ -2,6 +2,7 @@ const IMPACT_VALUES = Object.freeze({ H: 900, M: 600, L: 300 });
 const EFFORT_VALUES = Object.freeze({ H: 30, M: 20, L: 10 });
 const IMPACT_RANKS = Object.freeze({ H: 3, M: 2, L: 1 });
 const REPEAT_UNITS = Object.freeze(["none", "hour", "day", "week", "month", "year"]);
+export const REMINDER_PRIORITY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 export function scoreTask(task) {
   const impact = IMPACT_VALUES[task.impact] ?? IMPACT_VALUES.H;
@@ -24,6 +25,34 @@ export function sortTasks(tasks) {
     if (byScore !== 0) return byScore;
     return numberOr(left.createdAt, 0) - numberOr(right.createdAt, 0);
   });
+}
+
+export function sortActiveTasks(tasks, now = Date.now()) {
+  return [...tasks].sort((left, right) => {
+    const leftNear = hasNearReminder(left, now);
+    const rightNear = hasNearReminder(right, now);
+    if (leftNear !== rightNear) return leftNear ? -1 : 1;
+    if (leftNear && left.reminderAt !== right.reminderAt) {
+      return left.reminderAt - right.reminderAt;
+    }
+    const byScore = scoreTask(right) - scoreTask(left);
+    return byScore || numberOr(left.createdAt, 0) - numberOr(right.createdAt, 0);
+  });
+}
+
+export function nextReminderPriorityTransition(tasks, now = Date.now()) {
+  let next = null;
+  for (const task of tasks) {
+    if (task.completed || task.snoozed || !(task.reminderAt > 0)) continue;
+    const transition = task.reminderAt - REMINDER_PRIORITY_WINDOW_MS;
+    if (transition > now && (next === null || transition < next)) next = transition;
+  }
+  return next;
+}
+
+function hasNearReminder(task, now) {
+  return !task.completed && !task.snoozed && task.reminderAt > 0
+    && task.reminderAt - now <= REMINDER_PRIORITY_WINDOW_MS;
 }
 
 export function shouldApplySyncResponse(requestedRevision, currentRevision) {

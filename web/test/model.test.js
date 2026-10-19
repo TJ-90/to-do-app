@@ -7,11 +7,14 @@ import {
   nextRecurringOccurrence,
   hasSameSyncState,
   nextMutationTimestamp,
+  nextReminderPriorityTransition,
   normalizeTask,
+  REMINDER_PRIORITY_WINDOW_MS,
   recurringSuccessorId,
   reopenTaskState,
   scoreTask,
   shouldApplySyncResponse,
+  sortActiveTasks,
   sortTasks
 } from "../public/model.js";
 
@@ -46,6 +49,38 @@ test("sorting uses score descending then creation time ascending", () => {
     { id: "old", impact: "M", effort: "M", createdAt: 10 }
   ];
   assert.deepEqual(sortTasks(tasks).map((task) => task.id), ["high", "old", "new"]);
+});
+
+test("near reminders lead by due time while base scores remain unchanged", () => {
+  const now = 1_000_000_000;
+  const low = { impact: "L", effort: "H", urgent: false, createdAt: 1 };
+  const tasks = [
+    { ...low, id: "distant", reminderAt: now + REMINDER_PRIORITY_WINDOW_MS + 1 },
+    { id: "urgent", impact: "H", effort: "L", urgent: true, createdAt: 2 },
+    { ...low, id: "boundary", reminderAt: now + REMINDER_PRIORITY_WINDOW_MS },
+    { ...low, id: "soon", reminderAt: now + 60_000 },
+    { ...low, id: "overdue", reminderAt: now - 60_000 }
+  ];
+
+  assert.deepEqual(sortActiveTasks(tasks, now).map((task) => task.id),
+    ["overdue", "soon", "boundary", "urgent", "distant"]);
+  assert.equal(scoreTask(tasks[3]), 101);
+  assert.equal(scoreTask(tasks[1]), 1903);
+});
+
+test("reminders enter the window on time while Later and completed tasks stay out", () => {
+  const now = 1_000_000_000;
+  const reminder = { id: "reminder", impact: "L", effort: "H", reminderAt: now + REMINDER_PRIORITY_WINDOW_MS + 1 };
+  const urgent = { id: "urgent", impact: "H", effort: "L", urgent: true };
+  const later = { id: "later", impact: "H", effort: "L", urgent: true, snoozed: true, reminderAt: now + 1 };
+  const completed = { id: "completed", impact: "H", effort: "L", urgent: true, completed: true, reminderAt: now + 1 };
+
+  assert.equal(nextReminderPriorityTransition([reminder, later, completed], now), now + 1);
+  assert.deepEqual(sortActiveTasks([reminder, urgent, later], now).map((task) => task.id),
+    ["urgent", "reminder", "later"]);
+  assert.deepEqual(sortActiveTasks([reminder, urgent, later], now + 1).map((task) => task.id),
+    ["reminder", "urgent", "later"]);
+  assert.equal(nextReminderPriorityTransition([reminder, later, completed], now + 1), null);
 });
 
 test("a stale sync response cannot replace a newer local mutation", () => {

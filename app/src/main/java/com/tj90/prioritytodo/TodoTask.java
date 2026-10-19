@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 final class TodoTask {
+    static final long REMINDER_PRIORITY_WINDOW_MS = 48L * 60 * 60 * 1000;
     static final String HIGH = "H";
     static final String MEDIUM = "M";
     static final String LOW = "L";
@@ -44,6 +45,27 @@ final class TodoTask {
             s -= 5000;
         }
         return s;
+    }
+
+    boolean hasNearReminder(long now) {
+        return !completed && !snoozed && reminderAt > 0
+                && reminderAt - now <= REMINDER_PRIORITY_WINDOW_MS;
+    }
+
+    static int compareForActiveList(TodoTask first, TodoTask second, long now) {
+        boolean firstNear = first.hasNearReminder(now);
+        boolean secondNear = second.hasNearReminder(now);
+        if (firstNear != secondNear) {
+            return firstNear ? -1 : 1;
+        }
+        if (firstNear) {
+            int byReminder = Long.compare(first.reminderAt, second.reminderAt);
+            if (byReminder != 0) {
+                return byReminder;
+            }
+        }
+        int byScore = Double.compare(second.score(), first.score());
+        return byScore != 0 ? byScore : Long.compare(first.createdAt, second.createdAt);
     }
 
     String scoreLabel() {

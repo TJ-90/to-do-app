@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 import org.json.JSONObject;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.HashSet;
@@ -126,6 +127,44 @@ public final class TodoTaskTest {
         assertEquals(score(TodoTask.HIGH, TodoTask.LOW, true, false) - 5000,
                 snoozedMaximum, 0.0);
         assertTrue(snoozedMaximum < activeMinimum);
+    }
+
+    @Test
+    public void nearRemindersLeadByDueTimeWithoutChangingBaseScores() {
+        long now = 1_000_000_000L;
+        TodoTask overdue = task(TodoTask.LOW, TodoTask.HIGH, false, false);
+        overdue.reminderAt = now - 60_000;
+        TodoTask soon = task(TodoTask.LOW, TodoTask.HIGH, false, false);
+        soon.reminderAt = now + 60_000;
+        TodoTask atBoundary = task(TodoTask.LOW, TodoTask.HIGH, false, false);
+        atBoundary.reminderAt = now + TodoTask.REMINDER_PRIORITY_WINDOW_MS;
+        TodoTask urgent = task(TodoTask.HIGH, TodoTask.LOW, true, false);
+        TodoTask distant = task(TodoTask.LOW, TodoTask.HIGH, false, false);
+        distant.reminderAt = now + TodoTask.REMINDER_PRIORITY_WINDOW_MS + 1;
+
+        List<TodoTask> ordered = new ArrayList<>(Arrays.asList(
+                distant, urgent, atBoundary, soon, overdue));
+        ordered.sort((first, second) -> TodoTask.compareForActiveList(first, second, now));
+
+        assertEquals(Arrays.asList(overdue, soon, atBoundary, urgent, distant), ordered);
+        assertEquals(101, soon.score(), 0.0);
+        assertEquals(1903, urgent.score(), 0.0);
+    }
+
+    @Test
+    public void remindersEnterPriorityWindowAsTimePassesAndLaterStaysBelowActive() {
+        long now = 1_000_000_000L;
+        TodoTask reminder = task(TodoTask.LOW, TodoTask.HIGH, false, false);
+        reminder.reminderAt = now + TodoTask.REMINDER_PRIORITY_WINDOW_MS + 1;
+        TodoTask urgent = task(TodoTask.HIGH, TodoTask.LOW, true, false);
+        TodoTask later = task(TodoTask.HIGH, TodoTask.LOW, true, true);
+        later.reminderAt = now + 1;
+
+        assertTrue(TodoTask.compareForActiveList(urgent, reminder, now) < 0);
+        assertTrue(TodoTask.compareForActiveList(reminder, urgent, now + 1) < 0);
+        assertTrue(TodoTask.compareForActiveList(urgent, later, now) < 0);
+        reminder.completed = true;
+        assertTrue(TodoTask.compareForActiveList(urgent, reminder, now + 1) < 0);
     }
 
     @Test
