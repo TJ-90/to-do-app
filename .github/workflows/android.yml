@@ -47,7 +47,18 @@ jobs:
           gradle-version: "9.4.1"
 
       - name: Build APK
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
+        run: gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
+
+      - name: Upload unit-test and lint evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-todo-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

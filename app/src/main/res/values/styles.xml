@@ -2,6 +2,16 @@
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowBackground">@color/window_background</item>
-        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorAccent">#3A3D49</item>
+    </style>
+    <style name="AppTheme.Night" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:windowBackground">#14151B</item>
+        <item name="android:colorBackground">#1D2027</item>
+        <item name="android:colorAccent">#C8CBD6</item>
+        <item name="android:textColorPrimary">#F1F3F8</item>
+        <item name="android:textColorSecondary">#969CB0</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

@@ -74,15 +74,17 @@ tap_ui_label() {
   label="$3"
   adb shell uiautomator dump "$remote_dump" >/dev/null
   adb pull "$remote_dump" "$local_dump" >/dev/null
-  python3 - "$local_dump" "$label" "$SCREENSHOT_DIR/ui-target-center.txt" <<'PY'
+  python3 - "$local_dump" "$label" "$SCREENSHOT_DIR/ui-target-center.txt" "${4:-exact}" <<'PY'
 import re
 import sys
 import xml.etree.ElementTree as ET
 
-dump_file, label, output_file = sys.argv[1:]
+dump_file, label, output_file, match_mode = sys.argv[1:]
 root = ET.parse(dump_file).getroot()
-node = next((item for item in root.iter("node")
-             if label in {item.attrib.get("text", ""), item.attrib.get("content-desc", "")}), None)
+def matches(item):
+    values = (item.attrib.get("text", ""), item.attrib.get("content-desc", ""))
+    return any(value.startswith(label) for value in values) if match_mode == "prefix" else label in values
+node = next((item for item in root.iter("node") if matches(item)), None)
 if node is None:
     visible = sorted({value for item in root.iter("node")
                       for value in (item.attrib.get("text", ""), item.attrib.get("content-desc", ""))
@@ -94,6 +96,76 @@ with open(output_file, "w", encoding="utf-8") as destination:
 PY
   read target_x target_y < "$SCREENSHOT_DIR/ui-target-center.txt"
   adb shell input tap "$target_x" "$target_y"
+}
+
+# No image library is needed: decode Android's RGB/RGBA screencaps and verify
+# that night mode does not leave a white sheet/dialog on a darkened background.
+assert_screen_palette() {
+  python3 - "$1" "$2" <<'PY'
+import struct
+import sys
+import zlib
+
+path, theme = sys.argv[1:]
+data = open(path, "rb").read()
+assert data[:8] == b"\x89PNG\r\n\x1a\n", "Screenshot is not a PNG"
+offset, compressed = 8, bytearray()
+while offset < len(data):
+    size = struct.unpack(">I", data[offset:offset + 4])[0]
+    kind = data[offset + 4:offset + 8]
+    payload = data[offset + 8:offset + 8 + size]
+    if kind == b"IHDR":
+        width, height, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", payload)
+    elif kind == b"IDAT":
+        compressed.extend(payload)
+    offset += size + 12
+assert depth == 8 and color in (2, 6) and interlace == 0, "Unsupported screencap encoding"
+channels = 4 if color == 6 else 3
+stride = width * channels
+raw = zlib.decompress(compressed)
+previous = bytearray(stride)
+dark = bright = total = 0
+for y in range(height):
+    start = y * (stride + 1)
+    filtering = raw[start]
+    row = bytearray(raw[start + 1:start + 1 + stride])
+    for x in range(stride):
+        left = row[x - channels] if x >= channels else 0
+        above = previous[x]
+        upper_left = previous[x - channels] if x >= channels else 0
+        if filtering == 1:
+            predictor = left
+        elif filtering == 2:
+            predictor = above
+        elif filtering == 3:
+            predictor = (left + above) // 2
+        elif filtering == 4:
+            estimate = left + above - upper_left
+            distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+            predictor = (left, above, upper_left)[distances.index(min(distances))]
+        else:
+            assert filtering == 0, f"Unknown PNG filter {filtering}"
+            predictor = 0
+        row[x] = (row[x] + predictor) & 255
+    if height // 20 < y < height * 19 // 20 and y % 4 == 0:
+        for x in range(width // 20, width * 19 // 20, 4):
+            rgb = row[x * channels:x * channels + 3]
+            dark += max(rgb) < 100
+            bright += min(rgb) > 180
+            total += 1
+    previous = row
+fraction_dark, fraction_bright = dark / total, bright / total
+print(f"{path}: dark={fraction_dark:.1%}, bright={fraction_bright:.1%}, expected={theme}")
+if theme == "night":
+    assert fraction_dark > .80 and fraction_bright < .10, "Night screen contains an unthemed light surface"
+else:
+    assert fraction_bright > .60, "Day screen did not restore a light surface"
+PY
+}
+
+capture_palette() {
+  adb exec-out screencap -p > "$SCREENSHOT_DIR/$1.png"
+  assert_screen_palette "$SCREENSHOT_DIR/$1.png" "$2"
 }
 
 adb wait-for-device
@@ -361,40 +433,10 @@ with open(f"{SCREENSHOT_DIR}/title-input-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 clock = next((node for node in root.iter("node")
               if node.attrib.get("content-desc") == "Set reminder"), None)
-repeat_label = next((node for node in root.iter("node")
-                     if node.attrib.get("content-desc") == "Repeats every"), None)
-repeat_interval = next((node for node in root.iter("node")
-                        if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
-repeat_unit = next((node for node in root.iter("node")
-                    if node.attrib.get("content-desc", "").startswith("Repeat unit:")), None)
-if clock is None or repeat_label is None or repeat_interval is None or repeat_unit is None:
-    raise AssertionError(
-        "New-task sheet must show the reminder clock, Repeats every label, interval, and unit dropdown")
-if any(node.attrib.get("visible-to-user") == "false"
-       for node in (clock, repeat_label, repeat_interval, repeat_unit)):
-    raise AssertionError("Reminder repeat controls are present but not visible in the new-task sheet")
-clock_bounds = parse_bounds(clock.attrib["bounds"])
-label_bounds = parse_bounds(repeat_label.attrib["bounds"])
-interval_bounds = parse_bounds(repeat_interval.attrib["bounds"])
-unit_bounds = parse_bounds(repeat_unit.attrib["bounds"])
-if label_bounds[0] < clock_bounds[2] or interval_bounds[0] < label_bounds[2] or unit_bounds[0] < interval_bounds[2]:
-    raise AssertionError(
-        f"Repeat controls must sit inline after the clock: clock={clock_bounds}, "
-        f"label={label_bounds}, interval={interval_bounds}, unit={unit_bounds}")
-if max(clock_bounds[1], label_bounds[1], interval_bounds[1], unit_bounds[1]) >= min(
-        clock_bounds[3], label_bounds[3], interval_bounds[3], unit_bounds[3]):
-    raise AssertionError("Reminder controls do not overlap on one horizontal row")
-if interval_bounds[2] - interval_bounds[0] < 80 or unit_bounds[2] - unit_bounds[0] < 100:
-    raise AssertionError(
-        f"Repeat controls are too narrow: interval={interval_bounds}, unit={unit_bounds}")
-if min(clock_bounds[0], label_bounds[0], interval_bounds[0], unit_bounds[0]) < 0 or unit_bounds[2] > 720:
-    raise AssertionError(f"Repeat controls extend outside the CI viewport: unit={unit_bounds}")
-with open(f"{SCREENSHOT_DIR}/reminder-clock-center.txt", "w") as f:
-    f.write(f"{(clock_bounds[0] + clock_bounds[2]) // 2} "
-            f"{(clock_bounds[1] + clock_bounds[3]) // 2}\n")
-with open(f"{SCREENSHOT_DIR}/repeat-unit-center.txt", "w") as f:
-    f.write(f"{(unit_bounds[0] + unit_bounds[2]) // 2} "
-            f"{(unit_bounds[1] + unit_bounds[3]) // 2}\n")
+if clock is None:
+    raise AssertionError("New-task sheet must expose the compact reminder clock")
+if any(node.attrib.get("content-desc") == "Repeats every" for node in root.iter("node")):
+    raise AssertionError("Recurrence controls should stay collapsed until a reminder is set")
 list_pill = next(node for node in root.iter("node")
                  if node.attrib.get("content-desc", "").startswith("List: No list"))
 x, y = center(list_pill.attrib["bounds"])
@@ -402,112 +444,67 @@ with open(f"{SCREENSHOT_DIR}/initial-list-pill-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
 PY
 
-read repeat_unit_x repeat_unit_y < "$SCREENSHOT_DIR/repeat-unit-center.txt"
-adb shell input tap "$repeat_unit_x" "$repeat_unit_y"
+# Reminder controls are progressive: open settings, choose a schedule, then edit recurrence.
+tap_ui_label /sdcard/window-reminder-closed.xml "$SCREENSHOT_DIR/window-reminder-closed.xml" "Set reminder"
+sleep 1
+tap_ui_label /sdcard/window-reminder-options.xml "$SCREENSHOT_DIR/window-reminder-options.xml" "Tomorrow"
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02d-reminder-settings.png"
+adb shell uiautomator dump /sdcard/window-reminder-active.xml >/dev/null
+adb pull /sdcard/window-reminder-active.xml "$SCREENSHOT_DIR/window-reminder-active.xml" >/dev/null
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+
+root = ET.parse("app/build/verification-screenshots/window-reminder-active.xml").getroot()
+for label in ("Repeats every", "Repeat interval:", "Repeat unit:", "Clear reminder", "Close reminder settings"):
+    node = next((n for n in root.iter("node")
+                 if n.attrib.get("content-desc", "").startswith(label)), None)
+    if node is None:
+        raise AssertionError(f"Active reminder settings missing {label!r}")
+    bounds = list(map(int, re.findall(r"\d+", node.attrib["bounds"])))
+    if bounds[0] < 0 or bounds[2] > 720 or bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+        raise AssertionError(f"Reminder control {label!r} is outside the viewport: {bounds!r}")
+PY
+
+tap_ui_label /sdcard/window-repeat-menu-anchor.xml "$SCREENSHOT_DIR/window-repeat-menu-anchor.xml" "Repeat unit:" prefix
 sleep 1
 tap_ui_label /sdcard/window-repeat-menu.xml "$SCREENSHOT_DIR/window-repeat-menu.xml" "Days"
 sleep 1
 adb shell uiautomator dump /sdcard/window-repeat-days.xml >/dev/null
 adb pull /sdcard/window-repeat-days.xml "$SCREENSHOT_DIR/window-repeat-days.xml" >/dev/null
-
 python3 - <<'PY'
-import re
 import xml.etree.ElementTree as ET
 
-SCREENSHOT_DIR = "app/build/verification-screenshots"
-root = ET.parse(f"{SCREENSHOT_DIR}/window-repeat-days.xml").getroot()
-interval = next((node for node in root.iter("node")
-                 if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
-unit = next((node for node in root.iter("node")
-             if node.attrib.get("content-desc", "").startswith("Repeat unit: Days")), None)
-if interval is None or interval.attrib.get("class") != "android.widget.EditText":
-    raise AssertionError("Selecting Days did not expose an editable repeat interval")
-if interval.attrib.get("enabled") == "false":
-    raise AssertionError("Repeat interval stayed disabled after selecting Days")
-if unit is None:
-    raise AssertionError("Repeat-unit dropdown did not retain the Days selection")
-x1, y1, x2, y2 = map(int, re.findall(r"\d+", unit.attrib["bounds"]))
-with open(f"{SCREENSHOT_DIR}/repeat-days-center.txt", "w") as f:
-    f.write(f"{(x1 + x2) // 2} {(y1 + y2) // 2}\n")
+root = ET.parse("app/build/verification-screenshots/window-repeat-days.xml").getroot()
+interval = next((n for n in root.iter("node")
+                 if n.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
+if interval is None or interval.attrib.get("class") != "android.widget.EditText" or interval.attrib.get("enabled") == "false":
+    raise AssertionError("Selecting Days must expose an editable repeat interval")
+if not any(n.attrib.get("content-desc", "").startswith("Repeat unit: Days") for n in root.iter("node")):
+    raise AssertionError("Repeat-unit selection was not retained")
 PY
 
-read repeat_days_x repeat_days_y < "$SCREENSHOT_DIR/repeat-days-center.txt"
-adb shell input tap "$repeat_days_x" "$repeat_days_y"
+tap_ui_label /sdcard/window-repeat-days-anchor.xml "$SCREENSHOT_DIR/window-repeat-days-anchor.xml" "Repeat unit:" prefix
 sleep 1
 tap_ui_label /sdcard/window-repeat-reset-menu.xml "$SCREENSHOT_DIR/window-repeat-reset-menu.xml" "No repeat"
 sleep 1
-adb shell uiautomator dump /sdcard/window-repeat-reset.xml >/dev/null
-adb pull /sdcard/window-repeat-reset.xml "$SCREENSHOT_DIR/window-repeat-reset.xml" >/dev/null
-
+tap_ui_label /sdcard/window-reminder-clear.xml "$SCREENSHOT_DIR/window-reminder-clear.xml" "Clear reminder"
+sleep 1
+# The settings card remains open after clearing so the user can choose another schedule.
+tap_ui_label /sdcard/window-reminder-close.xml "$SCREENSHOT_DIR/window-reminder-close.xml" "Close reminder settings"
+sleep 1
+adb shell uiautomator dump /sdcard/window-reminder-reset.xml >/dev/null
+adb pull /sdcard/window-reminder-reset.xml "$SCREENSHOT_DIR/window-reminder-reset.xml" >/dev/null
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
 
-SCREENSHOT_DIR = "app/build/verification-screenshots"
-root = ET.parse(f"{SCREENSHOT_DIR}/window-repeat-reset.xml").getroot()
-edits = [node for node in root.iter("node")
-         if node.attrib.get("class") == "android.widget.EditText"]
-if len(edits) != 1:
-    raise AssertionError(f"No repeat should leave only the title input editable; found {len(edits)} fields")
-if not any(node.attrib.get("content-desc", "").startswith("Repeat unit: No repeat")
-           for node in root.iter("node")):
-    raise AssertionError("Repeat-unit dropdown did not reset to No repeat")
+root = ET.parse("app/build/verification-screenshots/window-reminder-reset.xml").getroot()
+if not any(n.attrib.get("content-desc") == "Set reminder" for n in root.iter("node")):
+    raise AssertionError("Clearing the reminder did not restore the unset clock")
+if any(n.attrib.get("content-desc") == "Repeats every" for n in root.iter("node")):
+    raise AssertionError("Closed reminder settings left recurrence controls in the capture sheet")
 PY
-
-read reminder_clock_x reminder_clock_y < "$SCREENSHOT_DIR/reminder-clock-center.txt"
-adb shell input tap "$reminder_clock_x" "$reminder_clock_y"
-sleep 1
-tap_ui_label /sdcard/window-reminder-date.xml "$SCREENSHOT_DIR/window-reminder-date.xml" "OK"
-sleep 1
-tap_ui_label /sdcard/window-reminder-time.xml "$SCREENSHOT_DIR/window-reminder-time.xml" "OK"
-sleep 1
-adb shell uiautomator dump /sdcard/window-reminder-active.xml >/dev/null
-adb pull /sdcard/window-reminder-active.xml "$SCREENSHOT_DIR/window-reminder-active.xml" >/dev/null
-
-python3 - <<'PY'
-import re
-import xml.etree.ElementTree as ET
-
-SCREENSHOT_DIR = "app/build/verification-screenshots"
-
-def bounds(node):
-    return list(map(int, re.findall(r"\d+", node.attrib["bounds"])))
-
-root = ET.parse(f"{SCREENSHOT_DIR}/window-reminder-active.xml").getroot()
-clock = next((node for node in root.iter("node")
-              if node.attrib.get("content-desc", "").startswith("Reminder set for ")), None)
-label = next((node for node in root.iter("node")
-              if node.attrib.get("content-desc") == "Repeats every"), None)
-interval = next((node for node in root.iter("node")
-                 if node.attrib.get("content-desc", "").startswith("Repeat interval:")), None)
-unit = next((node for node in root.iter("node")
-             if node.attrib.get("content-desc", "").startswith("Repeat unit:")), None)
-clear = next((node for node in root.iter("node")
-              if node.attrib.get("content-desc") == "Clear reminder"), None)
-if any(node is None for node in (clock, label, interval, unit, clear)):
-    raise AssertionError("Active reminder row is missing the clock, repeat controls, or Clear button")
-clock_bounds, label_bounds, interval_bounds, unit_bounds, clear_bounds = map(
-    bounds, (clock, label, interval, unit, clear))
-if not (clock_bounds[2] <= label_bounds[0] <= label_bounds[2] <= interval_bounds[0]
-        <= interval_bounds[2] <= unit_bounds[0] <= unit_bounds[2] <= clear_bounds[0]):
-    raise AssertionError(
-        f"Active reminder controls overlap horizontally: clock={clock_bounds}, label={label_bounds}, "
-        f"interval={interval_bounds}, unit={unit_bounds}, clear={clear_bounds}")
-if max(clock_bounds[1], label_bounds[1], interval_bounds[1], unit_bounds[1], clear_bounds[1]) >= min(
-        clock_bounds[3], label_bounds[3], interval_bounds[3], unit_bounds[3], clear_bounds[3]):
-    raise AssertionError("Active reminder controls do not share one horizontal row")
-if interval_bounds[2] - interval_bounds[0] < 80 or unit_bounds[2] - unit_bounds[0] < 100:
-    raise AssertionError(
-        f"Active repeat controls are too narrow: interval={interval_bounds}, unit={unit_bounds}")
-if clear_bounds[2] > 720:
-    raise AssertionError(f"Active reminder controls extend outside the viewport: clear={clear_bounds}")
-with open(f"{SCREENSHOT_DIR}/clear-reminder-center.txt", "w") as f:
-    f.write(f"{(clear_bounds[0] + clear_bounds[2]) // 2} "
-            f"{(clear_bounds[1] + clear_bounds[3]) // 2}\n")
-PY
-
-read clear_reminder_x clear_reminder_y < "$SCREENSHOT_DIR/clear-reminder-center.txt"
-adb shell input tap "$clear_reminder_x" "$clear_reminder_y"
-sleep 1
 
 read initial_list_x initial_list_y < "$SCREENSHOT_DIR/initial-list-pill-center.txt"
 adb shell input tap "$initial_list_x" "$initial_list_y"
@@ -1037,6 +1034,112 @@ if [ "$android_sync_visible" != 1 ]; then
   exit 1
 fi
 adb exec-out screencap -p > "$SCREENSHOT_DIR/05-after-web-sync.png"
+
+# Search must filter locally and clearing it must restore the synchronized task.
+tap_ui_label /sdcard/window-search-button.xml "$SCREENSHOT_DIR/window-search-button.xml" "Search tasks"
+sleep 1
+tap_ui_label /sdcard/window-search-query.xml "$SCREENSHOT_DIR/window-search-query.xml" "Search query"
+adb shell input text ci_search_no_match_7281
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+tap_ui_label /sdcard/window-search-submit.xml "$SCREENSHOT_DIR/window-search-submit.xml" "Search"
+sleep 1
+adb shell uiautomator dump /sdcard/window-search-empty.xml >/dev/null
+adb pull /sdcard/window-search-empty.xml "$SCREENSHOT_DIR/window-search-empty.xml" >/dev/null
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+root = ET.parse("app/build/verification-screenshots/window-search-empty.xml").getroot()
+if any(node.attrib.get("text") == "Web_synced_task" for node in root.iter("node")):
+    raise AssertionError("A nonmatching task remained visible after search")
+if not any(node.attrib.get("content-desc") == "Clear search" for node in root.iter("node")):
+    raise AssertionError("Filtered task view must expose a reachable Clear search action")
+PY
+tap_ui_label /sdcard/window-search-clear.xml "$SCREENSHOT_DIR/window-search-clear.xml" "Clear search"
+sleep 1
+adb shell uiautomator dump /sdcard/window-search-restored.xml >/dev/null
+adb pull /sdcard/window-search-restored.xml "$SCREENSHOT_DIR/window-search-restored.xml" >/dev/null
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+
+root = ET.parse("app/build/verification-screenshots/window-search-restored.xml").getroot()
+assert any(n.attrib.get("text") == "Web_synced_task" for n in root.iter("node")), "Clear search did not restore tasks"
+PY
+
+# Verify every native surface in explicit night mode, including dialogs that
+# otherwise inherit Android's light application theme.
+tap_ui_label /sdcard/window-theme-day.xml "$SCREENSHOT_DIR/window-theme-day.xml" "Day theme"
+sleep 1
+capture_palette 06-night-home night
+
+tap_ui_label /sdcard/window-night-lists-anchor.xml "$SCREENSHOT_DIR/window-night-lists-anchor.xml" "Choose list"
+sleep 1
+capture_palette 07-night-list-picker night
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+
+tap_ui_label /sdcard/window-night-add-anchor.xml "$SCREENSHOT_DIR/window-night-add-anchor.xml" "Add task"
+sleep 2
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+capture_palette 08-night-add night
+
+tap_ui_label /sdcard/window-night-list-pill.xml "$SCREENSHOT_DIR/window-night-list-pill.xml" "List: No list" prefix
+sleep 1
+capture_palette 09-night-sheet-list-picker night
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+
+tap_ui_label /sdcard/window-night-reminder-anchor.xml "$SCREENSHOT_DIR/window-night-reminder-anchor.xml" "Set reminder"
+sleep 1
+tap_ui_label /sdcard/window-night-reminder-tomorrow.xml "$SCREENSHOT_DIR/window-night-reminder-tomorrow.xml" "Tomorrow"
+sleep 1
+capture_palette 10-night-reminder-settings night
+tap_ui_label /sdcard/window-night-reminder-close.xml "$SCREENSHOT_DIR/window-night-reminder-close.xml" "Close reminder settings"
+sleep 1
+tap_ui_label /sdcard/window-night-cancel-add.xml "$SCREENSHOT_DIR/window-night-cancel-add.xml" "Cancel"
+sleep 1
+
+tap_ui_label /sdcard/window-night-edit-target.xml "$SCREENSHOT_DIR/window-night-edit-target.xml" "Web_synced_task"
+# A tap expands details; a long press on the same stable task location edits.
+read edit_target_x edit_target_y < "$SCREENSHOT_DIR/ui-target-center.txt"
+adb shell input swipe "$edit_target_x" "$edit_target_y" "$edit_target_x" "$edit_target_y" 700
+sleep 2
+if adb shell dumpsys input_method | grep -q 'mInputShown=true'; then
+  adb shell input keyevent KEYCODE_BACK
+  sleep 1
+fi
+capture_palette 11-night-edit night
+tap_ui_label /sdcard/window-night-cancel-edit.xml "$SCREENSHOT_DIR/window-night-cancel-edit.xml" "Cancel"
+sleep 1
+
+tap_ui_label /sdcard/window-night-more.xml "$SCREENSHOT_DIR/window-night-more.xml" "More options"
+sleep 1
+capture_palette 12-night-overflow night
+tap_ui_label /sdcard/window-night-sync-menu.xml "$SCREENSHOT_DIR/window-night-sync-menu.xml" "Sync with web"
+sleep 1
+capture_palette 13-night-sync-setup night
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+
+tap_ui_label /sdcard/window-night-help-more.xml "$SCREENSHOT_DIR/window-night-help-more.xml" "More options"
+sleep 1
+tap_ui_label /sdcard/window-night-help-menu.xml "$SCREENSHOT_DIR/window-night-help-menu.xml" "How it works"
+sleep 1
+capture_palette 14-night-help night
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+
+# Explicit theme choice survives process death; Auto and Day remain reachable.
+adb shell am force-stop com.tj90.prioritytodo
+adb shell am start -W -n com.tj90.prioritytodo/.MainActivity >/dev/null
+sleep 2
+capture_palette 15-night-after-restart night
+tap_ui_label /sdcard/window-theme-night.xml "$SCREENSHOT_DIR/window-theme-night.xml" "Night theme"
+sleep 1
+tap_ui_label /sdcard/window-theme-auto.xml "$SCREENSHOT_DIR/window-theme-auto.xml" "Auto theme"
+sleep 1
+capture_palette 16-restored-day day
 
 adb shell settings put system font_scale 1.0 || true
 adb shell wm size reset || true
