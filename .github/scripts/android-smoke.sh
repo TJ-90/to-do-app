@@ -83,7 +83,7 @@ dump_file, label, output_file, match_mode = sys.argv[1:]
 root = ET.parse(dump_file).getroot()
 def matches(item):
     values = (item.attrib.get("text", ""), item.attrib.get("content-desc", ""))
-    return any(value.startswith(label) for value in values) if match_mode == "prefix" else label in values
+    return any(value.casefold().startswith(label.casefold()) for value in values) if match_mode == "prefix" else label.casefold() in {value.casefold() for value in values}
 node = next((item for item in root.iter("node") if matches(item)), None)
 if node is None:
     visible = sorted({value for item in root.iter("node")

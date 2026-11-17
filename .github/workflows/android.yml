@@ -129,3 +129,49 @@ jobs:
           name: priority-todo-smoke-screenshots
           path: app/build/verification-screenshots/*
           if-no-files-found: error
+
+  modern-smoke:
+    name: Android 16 platform integration
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download the tested debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: priority-todo-debug-apk
+          path: app/build/outputs/apk/debug/
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify modern insets, platform back, and theme persistence
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: sh .github/scripts/android-modern-smoke.sh
+
+      - name: Upload modern platform screenshots and UI dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-todo-modern-smoke-screenshots
+          path: app/build/modern-verification-screenshots/*
+          if-no-files-found: error
