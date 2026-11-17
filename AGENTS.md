@@ -9,6 +9,7 @@ This repository contains a native Android app for a priority-based to-do system.
 - Task scoring model: `app/src/main/java/com/tj90/prioritytodo/TodoTask.java`
 - Local persistence: `app/src/main/java/com/tj90/prioritytodo/TaskStore.java`
 - Priority palette and rank colors: `app/src/main/java/com/tj90/prioritytodo/PriorityPalette.java`
+- Line icons (drawn, not font glyphs): `app/src/main/java/com/tj90/prioritytodo/Glyph.java`
 - Reminder scheduling: `app/src/main/java/com/tj90/prioritytodo/ReminderScheduler.java`
 - Notification receiver: `app/src/main/java/com/tj90/prioritytodo/ReminderReceiver.java`
 - Android sync transport: `app/src/main/java/com/tj90/prioritytodo/SyncClient.java`
@@ -21,6 +22,7 @@ This repository contains a native Android app for a priority-based to-do system.
 - Web tests: `web/test/`
 - APK CI workflow: `.github/workflows/android.yml`
 - Emulator smoke script: `.github/scripts/android-smoke.sh`
+- Android 16 platform smoke script: `.github/scripts/android-modern-smoke.sh`
 
 ## Product Rules
 
@@ -112,6 +114,16 @@ Do not change these constants, score math, or bucket thresholds unless the user 
   so a task keeps its color when switching lists.
 - Icons are drawn with `Glyph` (24-unit line icons); do not use text glyphs
   such as `‹`, `›`, `▾`, `×`, or emoji for controls.
+- The hero, list rows, and Later rows each complete through a small
+  `CheckBox` ring centered in a 48dp target (`completionTarget(...)`). Smoke
+  tests find completion controls by `android.widget.CheckBox` near the task
+  title and tap just outside the ring, so keep the ring under 24dp.
+- List tags on rows are drawn by `TagView`, not `TextView`, so a list name never
+  duplicates the exact label that list pickers and smoke tests tap.
+- List pickers are bottom-sheet dialogs (`sheetDialog(...)`, `optionRow(...)`)
+  with exact option labels: `All`, `No list`, each list name, and `New list`.
+- Set any `InsetDrawable` background with `setBackgroundKeepPadding(...)`;
+  plain `View.setBackground` replaces the view's padding with the insets.
 - Add/edit happens in a bottom sheet. Keep the sheet usable with the keyboard open; GitHub Actions smoke tests this path.
 - Task details use a progressive `Add details` affordance so an empty multiline field never crowds the sheet. Details are reference material and never affect scoring; expanded rows/heroes may show capped previews.
 - The sheet header always exposes one compact list picker at the top right. It supports `No list`, existing lists, and inline list creation; do not restore the old full-width LIST chip row.
@@ -212,7 +224,18 @@ xmllint --noout app/src/main/AndroidManifest.xml app/src/main/res/values/*.xml a
 git diff --check -- .
 ```
 
-If local Android tooling is unavailable, push to a `main`, `codex/**`, or `claude/**` branch and verify the `Android APK` workflow passes. That workflow runs:
+If the Android SDK cannot be downloaded (some sandboxes block
+`dl.google.com`), still compile before pushing: build against Robolectric's
+`org.robolectric:android-all` jar from Maven Central with a stub `R` class for
+the referenced resources, then run the JUnit tests with that jar, `junit`, and
+`org.json` on the classpath. This catches compile and model regressions only;
+lint, layout, and device behavior still need CI.
+
+The emulator smoke scripts tap exact text and content-description labels. When
+you rename a visible label or content description, search `.github/scripts/`
+for it and update the scripts in the same change.
+
+If local Android tooling is unavailable, push to a `main`, `codex/**`, or `claude/**` branch and verify the `Android APK` workflow passes. The installable APK is the run's `priority-todo-debug-apk` artifact. That workflow runs:
 
 - `testDebugUnitTest`
 - `assembleDebug`
