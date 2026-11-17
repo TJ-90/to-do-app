@@ -1013,7 +1013,9 @@ def center(bounds):
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-task-move.xml").getroot()
 tasks = [node for node in root.iter("node")
          if node.attrib.get("text", "").startswith("CI_task")]
-task = max(tasks, key=lambda node: center(node.attrib["bounds"])[1])
+# The expanded row can sit behind the floating dock on a large-font screen.
+# Reopen the unobscured hero rather than sending a long press into the dock.
+task = min(tasks, key=lambda node: center(node.attrib["bounds"])[1])
 x, y = center(task.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/moved-task-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
@@ -1048,10 +1050,13 @@ PY
 read move_cancel_x move_cancel_y < "$SCREENSHOT_DIR/move-verify-cancel-center.txt"
 adb shell input tap "$move_cancel_x" "$move_cancel_y"
 sleep 1
-adb shell uiautomator dump /sdcard/window-after-edit-close.xml
-adb pull /sdcard/window-after-edit-close.xml "$SCREENSHOT_DIR/window-after-edit-close.xml"
-
-python3 - <<'PY'
+# Find a row that is fully above the floating dock before testing its touch
+# target. Scroll the task body in bounded steps if large-font content is lower.
+completion_target_ready=0
+for attempt in 1 2 3 4; do
+  adb shell uiautomator dump /sdcard/window-after-edit-close.xml >/dev/null
+  adb pull /sdcard/window-after-edit-close.xml "$SCREENSHOT_DIR/window-after-edit-close.xml" >/dev/null
+  if python3 - <<'PY'
 import re
 import xml.etree.ElementTree as ET
 
@@ -1079,6 +1084,15 @@ if not candidates:
     raise AssertionError("Could not find the completion circle for the Android-created task")
 _, checkbox = min(candidates, key=lambda candidate: candidate[0])
 x, y = center(checkbox.attrib["bounds"])
+overlays = [n for n in root.iter("node") if n.attrib.get("content-desc") in
+            {"Previous list", "Next list", "Add task", "Focus", "Tasks", "Later", "Stats"}]
+overlay_top = min(int(re.findall(r"\d+", n.attrib["bounds"])[1]) for n in overlays)
+appbar = [n for n in root.iter("node") if n.attrib.get("text", "").endswith("All Tasks")
+          or n.attrib.get("content-desc") == "Search tasks"]
+appbar_bottom = max(int(re.findall(r"\d+", n.attrib["bounds"])[3]) for n in appbar)
+if not (appbar_bottom + 24 < y < overlay_top - 24):
+    print(f"Completion row is outside unobscured body: center={y}, appbar={appbar_bottom}, overlay={overlay_top}", file=__import__("sys").stderr)
+    raise SystemExit(2)
 x1, _, x2, _ = map(int, re.findall(r"\d+", checkbox.attrib["bounds"]))
 # The emulator density is 320dpi (2 physical px per dp). This lands 12dp
 # from the center: outside the 9dp visual ring, inside its 24dp touch radius.
@@ -1087,6 +1101,18 @@ assert off_ring_x > x2, f"Regression tap must be outside the visual circle: {che
 with open(f"{SCREENSHOT_DIR}/checkbox-center.txt", "w") as f:
     f.write(f"{off_ring_x} {y}\n")
 PY
+  then
+    completion_target_ready=1
+    break
+  fi
+  adb shell input swipe 640 820 640 420 300
+  sleep 1
+ done
+if [ "$completion_target_ready" != 1 ]; then
+  echo "The intended task completion target never became unobscured after bounded scrolling" >&2
+  exit 1
+fi
+adb exec-out screencap -p > "$SCREENSHOT_DIR/03d-before-off-ring-complete.png"
 
 curl -fsS http://127.0.0.1:8787/api/state > "$SCREENSHOT_DIR/server-state-before-off-ring-complete.json"
 python3 - <<'PY'
@@ -1184,6 +1210,35 @@ actual = next((task for task in state["tasks"] if task.get("id") == expected["id
 if actual != expected:
     raise AssertionError(f"Server did not preserve the exact web task schema/timestamps: {actual!r}")
 PY
+
+# Return the scrollable body to its ambient controls after the row-target test.
+# Vertical gestures stay inside the body and do not mutate any task.
+more_options_ready=0
+for attempt in 1 2 3 4; do
+  snapshot_ui window-before-return-to-top
+  if python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-before-return-to-top.xml").getroot()
+more = next((n for n in root.iter("node") if n.attrib.get("content-desc") == "More options"), None)
+if more is None:
+    raise SystemExit(2)
+x1, y1, x2, y2 = map(int, re.findall(r"\d+", more.attrib["bounds"]))
+appbar_bottom = max(int(re.findall(r"\d+", n.attrib["bounds"])[3]) for n in root.iter("node")
+                    if n.attrib.get("text", "").endswith("All Tasks") or n.attrib.get("content-desc") == "Search tasks")
+raise SystemExit(0 if x2 > x1 and y2 > y1 >= appbar_bottom else 2)
+PY
+  then
+    more_options_ready=1
+    break
+  fi
+  adb shell input swipe 640 420 640 820 300
+  sleep 1
+done
+if [ "$more_options_ready" != 1 ]; then
+  echo "Scrollable ambient controls did not return after bounded scrolling" >&2
+  exit 1
+fi
 
 tap_ui_label /sdcard/window-before-manual-sync.xml \
   "$SCREENSHOT_DIR/window-before-manual-sync.xml" "More options"

@@ -90,6 +90,16 @@ for kind, x1, y1, x2, y2 in re.findall(pattern, dump):
     bounds = tuple(map(int, (x1, y1, x2, y2)))
     if bounds[2] > bounds[0] and bounds[3] > bounds[1]:
         frames[kind].append(bounds)
+# Recent window dumps expose bar providers on their own windows rather than
+# listing InsetsSource objects. Use those real window frames when needed.
+for window in re.split(r"(?m)^  Window #\d+ ", dump)[1:]:
+    kind = re.search(r"\bty=(STATUS_BAR|NAVIGATION_BAR)(?:\s|$)", window)
+    frame = re.search(r"(?m)^\s+Frames:.*?\bframe=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", window)
+    if kind is not None and frame is not None and "isOnScreen=true" in window:
+        name = "statusBars" if kind[1] == "STATUS_BAR" else "navigationBars"
+        bounds = tuple(map(int, frame.groups()))
+        if bounds[2] > bounds[0] and bounds[3] > bounds[1]:
+            frames[name].append(bounds)
 assert all(frames.values()), f"Could not read real system-bar insets; inspect {insets_path}"
 status_bottom = max(frame[3] for frame in frames["statusBars"])
 nav_top = min(frame[1] for frame in frames["navigationBars"])

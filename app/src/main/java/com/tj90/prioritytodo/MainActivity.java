@@ -128,6 +128,7 @@ public final class MainActivity extends Activity {
     private boolean resumed;
 
     private FrameLayout root;
+    private ScrollView mainScroll;
     private TextView headerSubView;
     private String currentScreen = "Tasks";
     private String searchQuery = "";
@@ -408,6 +409,14 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(restoreListDock);
         root = new FrameLayout(this);
         root.setBackgroundColor(palette.bg);
+        if (Build.VERSION.SDK_INT >= 35) {
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                android.graphics.Insets safe = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                return insets;
+            });
+        }
 
         LinearLayout column = vertical();
         column.setBackgroundColor(palette.bg);
@@ -416,9 +425,11 @@ public final class MainActivity extends Activity {
         columnParams.bottomMargin = dp(64);
         root.addView(column, columnParams);
         column.addView(buildAppBar(), matchWrap(0, 0, 0, 0));
-        column.addView(buildHeader(), matchWrap(0, 0, 0, 0));
+        LinearLayout body = vertical();
+        body.setPadding(0, 0, 0, dp(150));
+        body.addView(buildHeader(), matchWrap(0, 0, 0, 0));
         heroContainer = vertical();
-        column.addView(heroContainer, matchWrap(20, 8, 20, 10));
+        body.addView(heroContainer, matchWrap(20, 8, 20, 10));
 
         LinearLayout listHeader = horizontal();
         listHeader.setPadding(dp(20), dp(8), dp(20), dp(8));
@@ -437,16 +448,17 @@ public final class MainActivity extends Activity {
         listFilterLabel.setOnClickListener(v -> showNavigationLists());
         listHeader.addView(listFilterLabel, wrap(0, 0, 0, 0));
         listHeaderView = listHeader;
-        column.addView(listHeader, matchWrap(0, 0, 0, 0));
+        body.addView(listHeader, matchWrap(0, 0, 0, 0));
 
-        ScrollView scroll = new ScrollView(this);
+        mainScroll = new ScrollView(this);
+        ScrollView scroll = mainScroll;
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setClipToPadding(false);
-        scroll.setPadding(dp(20), 0, dp(20), dp(150));
         listContainer = vertical();
         listContainer.setBackground(rounded(palette.surface, 20));
         listContainer.setClipToOutline(true);
-        scroll.addView(listContainer, new ScrollView.LayoutParams(
+        body.addView(listContainer, matchWrap(20, 0, 20, 0));
+        scroll.addView(body, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
         scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
             handler.removeCallbacks(restoreListDock);
@@ -469,6 +481,7 @@ public final class MainActivity extends Activity {
         confettiView.setFocusable(false);
 
         setContentView(root);
+        root.requestApplyInsets();
     }
 
     private GradientDrawable rounded(int color, int radius) {
@@ -482,6 +495,10 @@ public final class MainActivity extends Activity {
         LinearLayout bar = horizontal();
         bar.setPadding(dp(20), dp(4), dp(16), dp(4));
         TextView title = text("●  All Tasks", 18, 800, palette.ink);
+        android.text.SpannableString appTitle = new android.text.SpannableString("●  All Tasks");
+        appTitle.setSpan(new android.text.style.ForegroundColorSpan(PriorityPalette.IMMEDIATE),
+                0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        title.setText(appTitle);
         bar.addView(title, weight(1, 0, 0, 8, 0));
         HeaderIconButton search = new HeaderIconButton(this, "search");
         search.setContentDescription("Search tasks");
@@ -544,12 +561,19 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < labels.length; i++) {
             String screen = labels[i];
             boolean selected = screen.equals(currentScreen);
-            TextView item = text(icons[i] + "\n" + screen, 13, selected ? 800 : 600,
-                    selected ? palette.ink : palette.sub);
+            LinearLayout item = vertical();
             item.setGravity(Gravity.CENTER);
             item.setContentDescription(screen);
             item.setSelected(selected);
-            if (selected) item.setBackground(rounded(palette.line, 14));
+            TextView icon = text(icons[i], 24, selected ? 800 : 600,
+                    selected ? palette.ink : palette.sub);
+            icon.setIncludeFontPadding(false);
+            icon.setGravity(Gravity.CENTER);
+            item.addView(icon);
+            TextView label = text(screen, 11, selected ? 800 : 600,
+                    selected ? palette.ink : palette.sub);
+            label.setGravity(Gravity.CENTER);
+            item.addView(label);
             item.setOnClickListener(v -> {
                 currentScreen = screen;
                 expandedTaskKey = null;
@@ -639,6 +663,7 @@ public final class MainActivity extends Activity {
     private void selectNavigationList(String name, boolean recurring) {
         recurringOnly = recurring;
         activeCat = recurring || "All".equals(name) ? "All" : name;
+        if (mainScroll != null) mainScroll.scrollTo(0, 0);
         renderAll(false);
     }
 
@@ -688,7 +713,12 @@ public final class MainActivity extends Activity {
         for (String preset : new String[]{"Later today", "Tomorrow", "Weekend"}) {
             Calendar target = TaskViews.reminderPreset(Calendar.getInstance(), preset);
             String time = android.text.format.DateFormat.getTimeFormat(this).format(target.getTime());
-            TextView option = text(preset + "\n" + time, 11, 700, palette.ink);
+            String presetLabel = preset;
+            if ("Later today".equals(preset)
+                    && target.get(Calendar.DAY_OF_YEAR) != Calendar.getInstance().get(Calendar.DAY_OF_YEAR)) {
+                presetLabel = "Next evening";
+            }
+            TextView option = text(presetLabel + "\n" + time, 11, 700, palette.ink);
             option.setGravity(Gravity.CENTER);
             option.setMinHeight(dp(48));
             option.setBackground(rounded(palette.line, 10));
@@ -1025,22 +1055,6 @@ public final class MainActivity extends Activity {
     }
 
     private void addActZone() {
-        reachArc = new View(this);
-        GradientDrawable arc = new GradientDrawable();
-        arc.setShape(GradientDrawable.OVAL);
-        arc.setColor(Color.TRANSPARENT);
-        arc.setStroke(dp(2), PriorityPalette.withAlpha(palette.accent, 0x52), dp(8), dp(8));
-        reachArc.setBackground(arc);
-        FrameLayout.LayoutParams arcParams = new FrameLayout.LayoutParams(dp(280), dp(280));
-        arcParams.gravity = Gravity.BOTTOM | horizontalGravityForAddButton();
-        arcParams.bottomMargin = dp(-54);
-        if (HAND_RIGHT.equals(hand)) {
-            arcParams.rightMargin = dp(-118);
-        } else if (HAND_LEFT.equals(hand)) {
-            arcParams.leftMargin = dp(-118);
-        }
-        root.addView(reachArc, arcParams);
-
         fab = new TextView(this);
         TextView fabText = (TextView) fab;
         fabText.setText("+");
@@ -1076,16 +1090,7 @@ public final class MainActivity extends Activity {
         targetParams.rightMargin = fabParams.rightMargin;
         root.addView(fabTarget, targetParams);
 
-        View homeBar = new View(this);
-        GradientDrawable hb = new GradientDrawable();
-        hb.setColor(palette.ink);
-        hb.setCornerRadius(dp(2));
-        homeBar.setBackground(hb);
-        homeBar.setAlpha(0.16f);
-        FrameLayout.LayoutParams hbParams = new FrameLayout.LayoutParams(dp(120), dp(4));
-        hbParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        hbParams.bottomMargin = dp(66);
-        root.addView(homeBar, hbParams);
+
     }
 
     private int horizontalGravityForAddButton() {
@@ -1302,6 +1307,7 @@ public final class MainActivity extends Activity {
         bg.setCornerRadius(dp(24));
         bg.setStroke(dp(1), palette.line);
         card.setBackground(bg);
+        card.setClipToOutline(true);
 
         LinearLayout progressRow = horizontal();
         FrameLayout track = new FrameLayout(this);
@@ -1321,7 +1327,7 @@ public final class MainActivity extends Activity {
         progressRow.addView(track, trackParams);
         progressText = text(done + " of " + total + " done", 11, 700, palette.heroSub);
 
-        card.addView(progressRow, matchWrap(0, 0, 0, 14));
+        card.addView(progressRow, matchWrap(-17, -16, -17, 14));
         final int pctFinal = pct;
         final FrameLayout trackRef = track;
         final View fillRef = progressFill;
@@ -2501,7 +2507,16 @@ public final class MainActivity extends Activity {
             }
             return false;
         });
-        content.addView(sheetInput, matchWrap(0, 0, 0, 0));
+        FrameLayout titleField = new FrameLayout(this);
+        sheetInput.setPadding(dp(15), dp(14), dp(52), dp(14));
+        titleField.addView(sheetInput, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        TextView clearTitle = text("×", 22, 600, palette.sub);
+        clearTitle.setGravity(Gravity.CENTER);
+        clearTitle.setContentDescription("Clear task title");
+        clearTitle.setOnClickListener(v -> { sheetInput.setText(""); sheetInput.requestFocus(); });
+        titleField.addView(clearTitle, new FrameLayout.LayoutParams(dp(44), dp(48), Gravity.END | Gravity.CENTER_VERTICAL));
+        content.addView(titleField, matchWrap(0, 0, 0, 0));
         listPill.setAccessibilityTraversalAfter(sheetInput.getId());
 
         addDetailsRow = text("＋  Add details", 13, 700, palette.sub);
@@ -3166,6 +3181,7 @@ public final class MainActivity extends Activity {
         closeSheet();
         renderAll(true);
         if (isNew) {
+            if (mainScroll != null) mainScroll.smoothScrollTo(0, 0);
             showCheer("Let's go!");
         }
     }
@@ -3347,8 +3363,10 @@ public final class MainActivity extends Activity {
         if (sheetPanel == null || root == null) {
             return;
         }
+        int contentHeight = root.getHeight() - root.getPaddingTop() - root.getPaddingBottom();
+        int contentKeyboardInset = Math.max(0, keyboardInsetPx - root.getPaddingBottom());
         SheetKeyboardFrame frame = sheetKeyboardFrame(
-                root.getHeight(), keyboardInsetPx, dp(8), dp(12), dp(180));
+                contentHeight, contentKeyboardInset, dp(8), dp(12), dp(180));
         ViewGroup.LayoutParams rawParams = sheetPanel.getLayoutParams();
         if (!(rawParams instanceof FrameLayout.LayoutParams)) {
             return;
