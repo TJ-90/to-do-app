@@ -4040,6 +4040,7 @@ public final class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF oval = new RectF();
         private final Path path = new Path();
+        private final Path bite = new Path();
         private String handState = HAND_RIGHT;
         private String themeState = THEME_DAY;
 
@@ -4178,7 +4179,7 @@ public final class MainActivity extends Activity {
         private void drawMoon(Canvas canvas) {
             path.reset();
             path.addCircle(11.5f, 12.5f, 8.5f, Path.Direction.CW);
-            Path bite = new Path();
+            bite.reset();
             bite.addCircle(16.5f, 7.5f, 7f, Path.Direction.CW);
             path.op(bite, Path.Op.DIFFERENCE);
             canvas.drawPath(path, paint);
@@ -4198,7 +4199,7 @@ public final class MainActivity extends Activity {
      */
     private final class TagView extends View {
         private final String label;
-        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.text.TextPaint textPaint = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
         private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF box = new RectF();
         private final int padX = dp(6);
@@ -4229,7 +4230,7 @@ public final class MainActivity extends Activity {
             super.onDraw(canvas);
             box.set(0, 0, getWidth(), getHeight());
             canvas.drawRoundRect(box, dp(5), dp(5), fillPaint);
-            CharSequence shown = TextUtils.ellipsize(label, new android.text.TextPaint(textPaint),
+            CharSequence shown = TextUtils.ellipsize(label, textPaint,
                     getWidth() - padX * 2f, TextUtils.TruncateAt.END);
             Paint.FontMetrics metrics = textPaint.getFontMetrics();
             float baseline = getHeight() / 2f - (metrics.ascent + metrics.descent) / 2f;
