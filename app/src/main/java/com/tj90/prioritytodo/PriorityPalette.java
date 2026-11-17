@@ -27,9 +27,17 @@ final class PriorityPalette {
     final int later;
     final int heroInk;
     final int heroSub;
+    /** Badge / count chip fill (design token surface-container). */
+    final int chip;
+    /** Quiet filled container for pills and preset tiles (surface-container-low). */
+    final int soft;
+    /** Informational accent used for reminders and the list marker dot. */
+    final int info;
+    final int infoInk;
 
     private PriorityPalette(int bg, int surface, int ink, int sub, int line, int accent,
-                            int accentInk, int done, int later, int heroInk, int heroSub) {
+                            int accentInk, int done, int later, int heroInk, int heroSub,
+                            int chip, int soft, int info, int infoInk) {
         this.bg = bg;
         this.surface = surface;
         this.ink = ink;
@@ -41,16 +49,22 @@ final class PriorityPalette {
         this.later = later;
         this.heroInk = heroInk;
         this.heroSub = heroSub;
+        this.chip = chip;
+        this.soft = soft;
+        this.info = info;
+        this.infoInk = infoInk;
     }
 
     static PriorityPalette day() {
         return new PriorityPalette(0xFFF6F7FB, 0xFFFFFFFF, 0xFF1B1F2E, 0xFF787E93, 0xFFEDEDF3,
-                0xFF3A3D49, 0xFFFFFFFF, GREEN_DONE_DAY, 0xFFAB9356, 0xFF1B1F2E, 0xFF5C6276);
+                0xFF3A3D49, 0xFFFFFFFF, GREEN_DONE_DAY, 0xFFAB9356, 0xFF1B1F2E, 0xFF5C6276,
+                0xFFEAEDFF, 0xFFF2F3FF, 0xFF0058BD, 0xFFFFFFFF);
     }
 
     static PriorityPalette night() {
         return new PriorityPalette(0xFF14151B, 0xFF1D2027, 0xFFF1F3F8, 0xFF969CB0, 0xFF2A2D38,
-                0xFFC8CBD6, 0xFF0E0F16, GREEN_DONE_NIGHT, 0xFFC2A865, 0xFFF1F3F8, 0xFFA9ADC8);
+                0xFFC8CBD6, 0xFF0E0F16, GREEN_DONE_NIGHT, 0xFFC2A865, 0xFFF1F3F8, 0xFFA9ADC8,
+                0xFF2C3040, 0xFF242732, 0xFF9DBEFF, 0xFF0E1530);
     }
 
     static String bucket(double score) {

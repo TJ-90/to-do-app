@@ -6,6 +6,7 @@ import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
+import android.app.Dialog;
 import android.app.NotificationManager;
 import android.app.TimePickerDialog;
 import android.content.Context;
@@ -21,8 +22,11 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -39,6 +43,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.Window;
 import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
@@ -130,12 +135,19 @@ public final class MainActivity extends Activity {
     private FrameLayout root;
     private ScrollView mainScroll;
     private TextView headerSubView;
-    private String currentScreen = "Tasks";
+    // TaskViews screen keys: active (incomplete, not Later) and Later.
+    private static final String VIEW_ACTIVE = "Focus";
+    private static final String VIEW_LATER = "Later";
     private String searchQuery = "";
-    private boolean recurringOnly;
     private TextView listFilterLabel;
     private View listHeaderView;
-    private LinearLayout bottomNavigation;
+    private boolean laterExpanded;
+    private LinearLayout laterHeaderView;
+    private LinearLayout laterContainer;
+    // Rank of each active task across every list, so a task keeps its spectrum
+    // color when the user switches lists.
+    private final Map<String, Integer> globalRanks = new HashMap<>();
+    private int globalRankTotal;
     private final Runnable restoreListDock = () -> setListDockVisible(true);
     private boolean reminderSettingsOpen;
     private LinearLayout reminderSettingsPanel;
@@ -200,7 +212,9 @@ public final class MainActivity extends Activity {
     private TextView detailsSummary;
     private TextView detailsToggle;
     private ReminderClockButton remindChip;
-    private TextView remindClear;
+    private View remindClear;
+    private LinearLayout reminderInfoRow;
+    private View clearTitleButton;
     private ValueAnimator adjustPulse;
     private LinearLayout reminderRepeatRow;
     private LinearLayout chipsContainer;
@@ -334,9 +348,11 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(themedContext())
                 .setTitle("How it works")
                 .setMessage("• Tap  +  to add a task. It sorts itself by priority.\n\n"
+                        + "• The card at the top is your #1 across every list. Tap its circle when it's done.\n\n"
                         + "• Tap a task to reveal its full content. Long-press it to edit.\n\n"
                         + "• Tap Adjust to set impact & effort, or mark it Urgent to send it to #1.\n\n"
-                        + "• Swipe a task toward your thumb to finish it, the other way for Later.\n\n"
+                        + "• Swipe a task toward your thumb to finish it, the other way to park it in Later at the bottom of the list.\n\n"
+                        + "• Switch lists with the strip next to  + . Your progress lives in the ⋮ menu.\n\n"
                         + "• Drag the  +  button (or tap the hand icon) to switch it between left, center and right.")
                 .setPositiveButton("Close", null)
                 .show();
@@ -399,6 +415,12 @@ public final class MainActivity extends Activity {
 
     // ===================== chrome =====================
 
+    private static final int DOCK_HEIGHT = 52;
+    private static final int DOCK_BOTTOM = 16;
+    private static final int DOCK_EDGE = 16;
+    private static final int DOCK_GAP = 10;
+    private static final int FAB_SIZE = 52;
+
     private void buildChrome() {
         getWindow().setStatusBarColor(palette.bg);
         getWindow().setNavigationBarColor(palette.bg);
@@ -420,44 +442,33 @@ public final class MainActivity extends Activity {
 
         LinearLayout column = vertical();
         column.setBackgroundColor(palette.bg);
-        FrameLayout.LayoutParams columnParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-        columnParams.bottomMargin = dp(64);
-        root.addView(column, columnParams);
+        root.addView(column, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         column.addView(buildAppBar(), matchWrap(0, 0, 0, 0));
         LinearLayout body = vertical();
-        body.setPadding(0, 0, 0, dp(150));
+        // Clear the floating list dock (and the centered + button above it).
+        body.setPadding(0, 0, 0, dp(HAND_CENTER.equals(hand) ? 160 : 104));
         body.addView(buildHeader(), matchWrap(0, 0, 0, 0));
         heroContainer = vertical();
-        body.addView(heroContainer, matchWrap(20, 8, 20, 10));
-
-        LinearLayout listHeader = horizontal();
-        listHeader.setPadding(dp(20), dp(8), dp(20), dp(8));
-        TextView indexLabel = text("PRIORITY INDEX", 11, 800, palette.sub);
-        indexLabel.setLetterSpacing(0.08f);
-        listHeader.addView(indexLabel, weight(1, 0, 0, 8, 0));
-        listFilterLabel = text("", 12, 700, palette.ink);
-        listFilterLabel.setSingleLine(true);
-        listFilterLabel.setEllipsize(TextUtils.TruncateAt.END);
-        listFilterLabel.setMaxWidth(dp(150));
-        listFilterLabel.setMinHeight(dp(44));
-        listFilterLabel.setGravity(Gravity.CENTER);
-        listFilterLabel.setPadding(dp(12), 0, dp(12), 0);
-        listFilterLabel.setBackground(rounded(palette.line, 12));
-        listFilterLabel.setContentDescription("Choose list");
-        listFilterLabel.setOnClickListener(v -> showNavigationLists());
-        listHeader.addView(listFilterLabel, wrap(0, 0, 0, 0));
-        listHeaderView = listHeader;
-        body.addView(listHeader, matchWrap(0, 0, 0, 0));
+        body.addView(heroContainer, matchWrap(16, 4, 16, 0));
+        body.addView(buildListHeader(), matchWrap(0, 0, 0, 0));
 
         mainScroll = new ScrollView(this);
         ScrollView scroll = mainScroll;
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setClipToPadding(false);
-        listContainer = vertical();
-        listContainer.setBackground(rounded(palette.surface, 20));
-        listContainer.setClipToOutline(true);
-        body.addView(listContainer, matchWrap(20, 0, 20, 0));
+        listContainer = cardColumn();
+        body.addView(listContainer, matchWrap(16, 0, 16, 0));
+        laterHeaderView = horizontal();
+        laterHeaderView.setPadding(dp(20), dp(16), dp(14), dp(4));
+        laterHeaderView.setMinimumHeight(dp(52));
+        laterHeaderView.setOnClickListener(v -> {
+            laterExpanded = !laterExpanded;
+            renderAll(false);
+        });
+        body.addView(laterHeaderView, matchWrap(0, 0, 0, 0));
+        laterContainer = cardColumn();
+        body.addView(laterContainer, matchWrap(16, 0, 16, 0));
         scroll.addView(body, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
         scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
@@ -469,9 +480,8 @@ public final class MainActivity extends Activity {
         });
         column.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        addActZone();
-        addBottomNavigation();
         addListDock();
+        addActZone();
 
         confettiView = new ConfettiView(this);
         FrameLayout.LayoutParams confettiParams = new FrameLayout.LayoutParams(
@@ -491,32 +501,99 @@ public final class MainActivity extends Activity {
         return bg;
     }
 
+    /** Set a background without letting an InsetDrawable's insets replace the view's padding. */
+    private void setBackgroundKeepPadding(View view, Drawable background) {
+        int left = view.getPaddingLeft();
+        int top = view.getPaddingTop();
+        int right = view.getPaddingRight();
+        int bottom = view.getPaddingBottom();
+        view.setBackground(background);
+        view.setPadding(left, top, right, bottom);
+    }
+
+    private GradientDrawable cardBackground(int radius) {
+        GradientDrawable bg = rounded(palette.surface, radius);
+        bg.setStroke(Math.max(1, dp(1)), palette.line);
+        return bg;
+    }
+
+    /** White rounded card whose rows are clipped to its corners. */
+    private LinearLayout cardColumn() {
+        LinearLayout card = vertical();
+        card.setBackground(cardBackground(18));
+        int hairline = Math.max(1, dp(1));
+        card.setPadding(hairline, hairline, hairline, hairline);
+        card.setClipToOutline(true);
+        return card;
+    }
+
+    private View dot(int sizeDp, int color, boolean hollow) {
+        View dot = new View(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        if (hollow) {
+            bg.setColor(Color.TRANSPARENT);
+            bg.setStroke(Math.max(1, dp(2)), color);
+        } else {
+            bg.setColor(color);
+        }
+        dot.setBackground(bg);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp));
+        params.gravity = Gravity.CENTER_VERTICAL;
+        dot.setLayoutParams(params);
+        return dot;
+    }
+
+    private View glyphView(String kind, int sizeDp, int color) {
+        View icon = new View(this);
+        icon.setBackground(new Glyph(kind, dp(sizeDp), color));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp));
+        params.gravity = Gravity.CENTER_VERTICAL;
+        icon.setLayoutParams(params);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return icon;
+    }
+
+    private TextView countBadge(String value, int bgColor, int fgColor) {
+        TextView badge = text(value, 10, 800, fgColor);
+        badge.setIncludeFontPadding(false);
+        badge.setGravity(Gravity.CENTER);
+        badge.setMinWidth(dp(18));
+        badge.setPadding(dp(5), dp(2), dp(5), dp(2));
+        badge.setBackground(rounded(bgColor, 999));
+        return badge;
+    }
+
     private LinearLayout buildAppBar() {
         LinearLayout bar = horizontal();
-        bar.setPadding(dp(20), dp(4), dp(16), dp(4));
+        bar.setPadding(dp(20), dp(6), dp(10), dp(2));
+        bar.setMinimumHeight(dp(56));
         TextView title = text("●  All Tasks", 18, 800, palette.ink);
         android.text.SpannableString appTitle = new android.text.SpannableString("●  All Tasks");
         appTitle.setSpan(new android.text.style.ForegroundColorSpan(PriorityPalette.IMMEDIATE),
                 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        appTitle.setSpan(new android.text.style.RelativeSizeSpan(0.7f),
+                0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         title.setText(appTitle);
         bar.addView(title, weight(1, 0, 0, 8, 0));
+        if (!searchQuery.isEmpty()) {
+            TextView clear = text("Clear", 13, 700, palette.info);
+            clear.setGravity(Gravity.CENTER);
+            clear.setMinWidth(dp(44));
+            clear.setMinHeight(dp(44));
+            clear.setPadding(dp(10), 0, dp(10), 0);
+            clear.setContentDescription("Clear search");
+            clear.setOnClickListener(v -> { searchQuery = ""; rebuildEverything(); });
+            bar.addView(clear, wrap(0, 0, 2, 0));
+        }
         HeaderIconButton search = new HeaderIconButton(this, "search");
         search.setContentDescription("Search tasks");
         search.setOnClickListener(v -> showSearch());
-        bar.addView(search, wrap(0, 0, 8, 0));
+        bar.addView(search, wrap(0, 0, 2, 0));
         HeaderIconButton account = new HeaderIconButton(this, "account");
         account.setContentDescription("Sync settings");
         account.setOnClickListener(v -> showSyncSetup());
         bar.addView(account, wrap(0, 0, 0, 0));
-        if (!searchQuery.isEmpty()) {
-            TextView clear = text("×", 22, 700, palette.ink);
-            clear.setGravity(Gravity.CENTER);
-            clear.setMinWidth(dp(44));
-            clear.setMinHeight(dp(44));
-            clear.setContentDescription("Clear search");
-            clear.setOnClickListener(v -> { searchQuery = ""; rebuildEverything(); });
-            bar.addView(clear, wrap(4, 0, 0, 0));
-        }
         return bar;
     }
 
@@ -537,7 +614,7 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Search", (d, which) -> {
                     searchQuery = query.getText().toString().trim();
-                    currentScreen = "Tasks";
+                    expandedTaskKey = null;
                     rebuildEverything();
                 }).create();
         query.setOnEditorActionListener((v, action, event) -> {
@@ -552,51 +629,50 @@ public final class MainActivity extends Activity {
         dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
     }
 
-    private void addBottomNavigation() {
-        bottomNavigation = horizontal();
-        bottomNavigation.setPadding(dp(8), dp(4), dp(8), dp(4));
-        bottomNavigation.setBackgroundColor(palette.surface);
-        String[] labels = {"Focus", "Tasks", "Later", "Stats"};
-        String[] icons = {"◎", "☷", "◷", "↗"};
-        for (int i = 0; i < labels.length; i++) {
-            String screen = labels[i];
-            boolean selected = screen.equals(currentScreen);
-            LinearLayout item = vertical();
-            item.setGravity(Gravity.CENTER);
-            item.setContentDescription(screen);
-            item.setSelected(selected);
-            TextView icon = text(icons[i], 24, selected ? 800 : 600,
-                    selected ? palette.ink : palette.sub);
-            icon.setIncludeFontPadding(false);
-            icon.setGravity(Gravity.CENTER);
-            item.addView(icon);
-            TextView label = text(screen, 11, selected ? 800 : 600,
-                    selected ? palette.ink : palette.sub);
-            label.setGravity(Gravity.CENTER);
-            item.addView(label);
-            item.setOnClickListener(v -> {
-                currentScreen = screen;
-                expandedTaskKey = null;
-                rebuildEverything();
-            });
-            bottomNavigation.addView(item, new LinearLayout.LayoutParams(0,
-                    LinearLayout.LayoutParams.MATCH_PARENT, 1f));
-        }
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(64), Gravity.BOTTOM);
-        root.addView(bottomNavigation, params);
+    /** "PRIORITY INDEX" kicker plus the current-list badge, which opens the list picker. */
+    private View buildListHeader() {
+        LinearLayout listHeader = horizontal();
+        listHeader.setPadding(dp(20), dp(12), dp(16), dp(0));
+        TextView indexLabel = text("PRIORITY INDEX", 11, 800, palette.sub);
+        indexLabel.setLetterSpacing(0.08f);
+        listHeader.addView(indexLabel, wrap(0, 0, 10, 0));
+
+        LinearLayout badge = horizontal();
+        badge.setMinimumHeight(dp(44));
+        badge.setPadding(dp(9), 0, dp(5), 0);
+        setBackgroundKeepPadding(badge, new InsetDrawable(rounded(palette.chip, 8), 0, dp(10), 0, dp(10)));
+        badge.setContentDescription("Choose list");
+        badge.setOnClickListener(v -> showNavigationLists());
+        View marker = dot(6, palette.info, false);
+        ((LinearLayout.LayoutParams) marker.getLayoutParams()).rightMargin = dp(6);
+        badge.addView(marker);
+        listFilterLabel = text("", 12, 700, palette.ink);
+        listFilterLabel.setSingleLine(true);
+        listFilterLabel.setEllipsize(TextUtils.TruncateAt.END);
+        listFilterLabel.setMaxWidth(dp(170));
+        listFilterLabel.setIncludeFontPadding(false);
+        badge.addView(listFilterLabel);
+        View caret = glyphView(Glyph.EXPAND_MORE, 16, palette.sub);
+        ((LinearLayout.LayoutParams) caret.getLayoutParams()).leftMargin = dp(2);
+        badge.addView(caret);
+        listHeader.addView(badge, wrap(0, 0, 0, 0));
+        listHeaderView = listHeader;
+        return listHeader;
     }
 
     private void addListDock() {
-        catStrip = vertical();
-        catStrip.setPadding(dp(4), dp(2), dp(4), dp(2));
-        catStrip.setBackground(rounded(palette.surface, 22));
-        catStrip.setElevation(dp(4));
+        catStrip = horizontal();
+        catStrip.setPadding(dp(2), 0, dp(2), 0);
+        GradientDrawable bg = rounded(palette.surface, 18);
+        bg.setStroke(Math.max(1, dp(1)), palette.line);
+        catStrip.setBackground(bg);
+        catStrip.setElevation(dp(6));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.BOTTOM);
-        params.bottomMargin = dp(HAND_CENTER.equals(hand) ? 152 : 86);
-        params.leftMargin = dp(HAND_LEFT.equals(hand) ? 96 : 16);
-        params.rightMargin = dp(HAND_RIGHT.equals(hand) ? 96 : 16);
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(DOCK_HEIGHT), Gravity.BOTTOM);
+        params.bottomMargin = dp(DOCK_BOTTOM);
+        int besideFab = DOCK_EDGE + FAB_SIZE + DOCK_GAP;
+        params.leftMargin = dp(HAND_LEFT.equals(hand) ? besideFab : DOCK_EDGE);
+        params.rightMargin = dp(HAND_RIGHT.equals(hand) ? besideFab : DOCK_EDGE);
         root.addView(catStrip, params);
     }
 
@@ -614,20 +690,107 @@ public final class MainActivity extends Activity {
         }
     }
 
+    // ---- bottom-sheet style pickers (lists, progress) ----
+
+    private Dialog sheetDialog(String title, View body) {
+        Dialog dialog = new Dialog(themedContext());
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout panel = vertical();
+        panel.setPadding(dp(8), dp(8), dp(8), dp(20));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(palette.surface);
+        float r = dp(26);
+        bg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        panel.setBackground(bg);
+        View grip = new View(this);
+        grip.setBackground(rounded(palette.line, 2));
+        LinearLayout.LayoutParams gripParams = new LinearLayout.LayoutParams(dp(36), dp(4));
+        gripParams.gravity = Gravity.CENTER_HORIZONTAL;
+        gripParams.topMargin = dp(2);
+        gripParams.bottomMargin = dp(12);
+        panel.addView(grip, gripParams);
+        TextView heading = text(title, 17, 800, palette.ink);
+        heading.setPadding(dp(16), 0, dp(16), dp(10));
+        panel.addView(heading, matchWrap(0, 0, 0, 0));
+        ScrollView scroller = new ScrollView(this);
+        scroller.setVerticalScrollBarEnabled(false);
+        scroller.addView(body, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        panel.addView(scroller, matchWrap(0, 0, 0, 0));
+        dialog.setContentView(panel);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setGravity(Gravity.BOTTOM);
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.setDimAmount(0.45f);
+        }
+        return dialog;
+    }
+
+    private void showSheetDialog(Dialog dialog) {
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private View optionRow(String label, int count, boolean selected, View lead, Runnable onTap) {
+        LinearLayout row = horizontal();
+        row.setMinimumHeight(dp(52));
+        row.setPadding(dp(14), 0, dp(14), 0);
+        if (selected) {
+            row.setBackground(rounded(palette.soft, 14));
+        }
+        if (lead != null) {
+            LinearLayout.LayoutParams leadParams = new LinearLayout.LayoutParams(dp(20), dp(20));
+            leadParams.gravity = Gravity.CENTER_VERTICAL;
+            leadParams.rightMargin = dp(14);
+            FrameLayout leadBox = new FrameLayout(this);
+            ViewGroup.LayoutParams own = lead.getLayoutParams();
+            int w = own != null && own.width > 0 ? own.width : dp(20);
+            int h = own != null && own.height > 0 ? own.height : dp(20);
+            leadBox.addView(lead, new FrameLayout.LayoutParams(w, h, Gravity.CENTER));
+            row.addView(leadBox, leadParams);
+        }
+        TextView name = text(label, 15, selected ? 700 : 500, palette.ink);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(name, weight(1, 0, 0, 8, 0));
+        if (count > 0) {
+            row.addView(countBadge(String.valueOf(count), palette.chip, palette.sub), wrap(0, 0, 0, 0));
+        }
+        if (selected) {
+            View check = glyphView(Glyph.CHECK, 18, palette.info);
+            ((LinearLayout.LayoutParams) check.getLayoutParams()).leftMargin = dp(10);
+            row.addView(check);
+        }
+        row.setOnClickListener(v -> onTap.run());
+        return row;
+    }
+
     private void showNavigationLists() {
-        List<String> options = new ArrayList<>();
-        options.add("All");
-        options.add("Recurring");
-        options.addAll(categories);
-        options.add("+ New list");
-        new AlertDialog.Builder(themedContext()).setTitle("Choose list")
-                .setItems(options.toArray(new String[0]), (d, which) -> {
-                    if (which == options.size() - 1) {
-                        showCreateListForNavigation();
-                    } else {
-                        selectNavigationList(options.get(which), which == 1);
-                    }
-                }).setNegativeButton("Cancel", null).show();
+        LinearLayout options = vertical();
+        Dialog dialog = sheetDialog("Lists", options);
+        for (String name : tabList()) {
+            boolean selected = name.equals(activeCat);
+            View lead = "All".equals(name)
+                    ? glyphView(Glyph.LIST, 20, selected ? palette.info : palette.sub)
+                    : dot(9, selected ? palette.info : palette.sub, !selected);
+            options.addView(optionRow(name, catCount(name), selected, lead, () -> {
+                dialog.dismiss();
+                selectNavigationList(name);
+            }), matchWrap(0, 0, 0, 2));
+        }
+        options.addView(optionRow("New list", 0, false, glyphView(Glyph.PLUS, 20, palette.info), () -> {
+            dialog.dismiss();
+            showCreateListForNavigation();
+        }), matchWrap(0, 0, 0, 0));
+        showSheetDialog(dialog);
     }
 
     private void showCreateListForNavigation() {
@@ -647,52 +810,82 @@ public final class MainActivity extends Activity {
             }
             for (String existing : categories) {
                 if (existing.equalsIgnoreCase(name)) {
-                    selectNavigationList(existing, false);
+                    selectNavigationList(existing);
                     dialog.dismiss();
                     return;
                 }
             }
             activateCategory(name, nextMutationTimestamp());
             persistMutation();
-            selectNavigationList(name, false);
+            selectNavigationList(name);
             dialog.dismiss();
         }));
         dialog.show();
     }
 
-    private void selectNavigationList(String name, boolean recurring) {
-        recurringOnly = recurring;
-        activeCat = recurring || "All".equals(name) ? "All" : name;
+    private void selectNavigationList(String name) {
+        activeCat = "All".equals(name) || categories.contains(name) ? name : "All";
+        expandedTaskKey = null;
         if (mainScroll != null) mainScroll.scrollTo(0, 0);
         renderAll(false);
     }
 
     private void stepNavigationList(int direction) {
         List<String> tabs = tabList();
-        int index = recurringOnly ? 1 : "All".equals(activeCat) ? 0 : categories.indexOf(activeCat) + 2;
+        int index = Math.max(0, tabs.indexOf(activeCat));
         int next = (index + direction + tabs.size()) % tabs.size();
-        selectNavigationList(tabs.get(next), next == 1);
+        selectNavigationList(tabs.get(next));
     }
 
-    private void renderStats() {
-        heroContainer.removeAllViews();
+    private void showProgress() {
         int done = 0, active = 0, later = 0, recurring = 0;
         for (TodoTask task : tasks) {
-            if (!inActiveCat(task)) continue;
-            if (task.completed) done++;
-            else {
-                if (task.snoozed) later++; else active++;
-                if (task.reminderAt > 0 && !TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)) recurring++;
+            if (task.completed) {
+                done++;
+                continue;
             }
+            if (task.snoozed) later++; else active++;
+            if (task.reminderAt > 0 && !TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)) recurring++;
         }
-        LinearLayout card = vertical();
-        card.setPadding(dp(20), dp(20), dp(20), dp(20));
-        card.setBackground(rounded(palette.surface, 24));
-        card.addView(text("Every task counts", 23, 800, palette.ink));
-        card.addView(text(done + " completed", 28, 800, palette.done), matchWrap(0, 18, 0, 8));
-        card.addView(text(active + " active  ·  " + later + " later  ·  " + recurring + " recurring", 14, 600, palette.sub));
-        card.addView(text("Progress is calculated from tasks saved on this device, including synced tasks.", 13, 500, palette.sub), matchWrap(0, 18, 0, 0));
-        heroContainer.addView(card);
+        LinearLayout body = vertical();
+        body.setPadding(dp(16), 0, dp(16), dp(4));
+        body.addView(text("Every task counts", 14, 600, palette.sub));
+        LinearLayout big = horizontal();
+        big.setGravity(Gravity.BOTTOM);
+        TextView doneCount = text(String.valueOf(done), 40, 800, palette.done);
+        doneCount.setIncludeFontPadding(false);
+        big.addView(doneCount);
+        TextView doneLabel = text("completed", 15, 700, palette.ink);
+        big.addView(doneLabel, wrap(8, 0, 0, 4));
+        body.addView(big, matchWrap(0, 8, 0, 14));
+
+        LinearLayout track = horizontal();
+        track.setBackground(rounded(palette.chip, 4));
+        track.setClipToOutline(true);
+        View fill = new View(this);
+        fill.setBackground(rounded(palette.done, 4));
+        int open = active + later;
+        track.addView(fill, new LinearLayout.LayoutParams(0, dp(8), done));
+        track.addView(new View(this), new LinearLayout.LayoutParams(0, dp(8), done + open == 0 ? 1 : open));
+        body.addView(track, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)));
+
+        LinearLayout tiles = horizontal();
+        tiles.addView(statTile(active, "Active"), weight(1, 0, 0, 8, 0));
+        tiles.addView(statTile(later, "Later"), weight(1, 0, 0, 8, 0));
+        tiles.addView(statTile(recurring, "Repeating"), weight(1, 0, 0, 0, 0));
+        body.addView(tiles, matchWrap(0, 16, 0, 12));
+        body.addView(text("Counts every task saved on this device, including synced ones.",
+                12, 500, palette.sub));
+        showSheetDialog(sheetDialog("Your progress", body));
+    }
+
+    private View statTile(int value, String label) {
+        LinearLayout tile = vertical();
+        tile.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tile.setBackground(rounded(palette.soft, 14));
+        tile.addView(text(String.valueOf(value), 20, 800, palette.ink));
+        tile.addView(text(label, 12, 600, palette.sub));
+        return tile;
     }
 
     private void renderReminderSettings() {
@@ -700,65 +893,90 @@ public final class MainActivity extends Activity {
         reminderSettingsPanel.setVisibility(reminderSettingsOpen ? View.VISIBLE : View.GONE);
         if (!reminderSettingsOpen) return;
         LinearLayout heading = horizontal();
+        View alarm = glyphView(Glyph.CLOCK, 18, palette.info);
+        ((LinearLayout.LayoutParams) alarm.getLayoutParams()).rightMargin = dp(8);
+        heading.addView(alarm);
         heading.addView(text("Set reminder", 14, 800, palette.ink), weight(1, 0, 0, 4, 0));
-        TextView close = text("×", 22, 600, palette.sub);
-        close.setGravity(Gravity.CENTER);
-        close.setMinWidth(dp(44));
-        close.setMinHeight(dp(44));
+        View close = new View(this);
+        close.setBackground(new Glyph(Glyph.CLOSE, dp(18), palette.sub, 2.2f));
         close.setContentDescription("Close reminder settings");
         close.setOnClickListener(v -> { reminderSettingsOpen = false; updateSheetDynamic(); });
-        heading.addView(close);
+        heading.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
         reminderSettingsPanel.addView(heading);
+
         LinearLayout shortcuts = horizontal();
-        for (String preset : new String[]{"Later today", "Tomorrow", "Weekend"}) {
+        String[] presets = {"Later today", "Tomorrow", "Weekend"};
+        for (int i = 0; i < presets.length; i++) {
+            String preset = presets[i];
             Calendar target = TaskViews.reminderPreset(Calendar.getInstance(), preset);
-            String time = android.text.format.DateFormat.getTimeFormat(this).format(target.getTime());
+            boolean chosen = draftReminderAt == target.getTimeInMillis();
             String presetLabel = preset;
             if ("Later today".equals(preset)
                     && target.get(Calendar.DAY_OF_YEAR) != Calendar.getInstance().get(Calendar.DAY_OF_YEAR)) {
                 presetLabel = "Next evening";
             }
-            TextView option = text(presetLabel + "\n" + time, 11, 700, palette.ink);
-            option.setGravity(Gravity.CENTER);
-            option.setMinHeight(dp(48));
-            option.setBackground(rounded(palette.line, 10));
-            option.setContentDescription(preset);
-            option.setOnClickListener(v -> {
+            String time = android.text.format.DateFormat.getTimeFormat(this).format(target.getTime());
+            if ("Weekend".equals(preset)) {
+                time = new java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault())
+                        .format(target.getTime()) + " " + time;
+            }
+            LinearLayout tile = vertical();
+            tile.setPadding(dp(10), dp(9), dp(8), dp(9));
+            tile.setMinimumHeight(dp(52));
+            tile.setBackground(rounded(chosen ? palette.info : palette.soft, 12));
+            tile.setContentDescription(preset);
+            TextView kicker = text(presetLabel.toUpperCase(java.util.Locale.ROOT), 10, 800,
+                    chosen ? PriorityPalette.withAlpha(palette.infoInk, 0xCC) : palette.sub);
+            kicker.setLetterSpacing(0.04f);
+            kicker.setSingleLine(true);
+            kicker.setEllipsize(TextUtils.TruncateAt.END);
+            tile.addView(kicker);
+            TextView when = text(time, 13, 700, chosen ? palette.infoInk : palette.ink);
+            when.setSingleLine(true);
+            when.setEllipsize(TextUtils.TruncateAt.END);
+            tile.addView(when, matchWrap(0, 2, 0, 0));
+            tile.setOnClickListener(v -> {
                 draftReminderAt = TaskViews.reminderPreset(Calendar.getInstance(), preset).getTimeInMillis();
                 updateSheetDynamic();
             });
-            shortcuts.addView(option, weight(1, 0, 0, 4, 0));
+            shortcuts.addView(tile, weight(1, 0, 0, i < presets.length - 1 ? 6 : 0, 0));
         }
-        reminderSettingsPanel.addView(shortcuts, matchWrap(0, 0, 0, 6));
-        TextView custom = text("Custom date & time  ›", 12, 700, palette.ink);
+        reminderSettingsPanel.addView(shortcuts, matchWrap(0, 2, 6, 8));
+
+        TextView custom = text("Custom date & time", 13, 600, palette.ink);
+        custom.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                new Glyph(Glyph.CALENDAR, dp(16), palette.info, 2.2f), null,
+                new Glyph(Glyph.CHEVRON_RIGHT, dp(16), palette.sub, 2.2f), null);
+        custom.setCompoundDrawablePadding(dp(8));
         custom.setMinHeight(dp(44));
+        custom.setPadding(dp(12), 0, dp(10), 0);
         custom.setGravity(Gravity.CENTER_VERTICAL);
+        custom.setBackground(rounded(palette.soft, 12));
         custom.setContentDescription("Custom date & time");
         custom.setOnClickListener(v -> openReminderPicker());
-        reminderSettingsPanel.addView(custom, matchWrap(0, 0, 0, 0));
+        reminderSettingsPanel.addView(custom, matchWrap(0, 0, 6, 0));
         if (draftReminderAt > 0) {
             reminderRepeatRow = horizontal();
             buildRepeatControls(reminderRepeatRow);
-            reminderSettingsPanel.addView(reminderRepeatRow, matchWrap(0, 4, 0, 0));
+            reminderSettingsPanel.addView(reminderRepeatRow, matchWrap(0, 8, 6, 0));
         }
     }
 
-
     private LinearLayout buildHeader() {
         LinearLayout header = horizontal();
-        header.setPadding(dp(20), dp(8), dp(16), dp(4));
+        header.setPadding(dp(20), dp(6), dp(8), dp(8));
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         LinearLayout titleCol = vertical();
-        TextView today = text("Stats".equals(currentScreen) ? "Your progress" : "Later".equals(currentScreen) ? "For later" : "Today", 26, 800, palette.ink);
+        TextView today = text(searchQuery.isEmpty() ? "Today" : "Search", 26, 800, palette.ink);
         today.setIncludeFontPadding(false);
-        headerSubView = text("", 13, 600, palette.sub);
+        today.setLetterSpacing(-0.02f);
+        headerSubView = text("", 13, 500, palette.sub);
         titleCol.addView(today);
-        titleCol.addView(headerSubView, matchWrap(0, 4, 0, 0));
+        titleCol.addView(headerSubView, matchWrap(0, 5, 0, 0));
         header.addView(titleCol, weight(1, 0, 0, 0, 0));
 
-        // Minimal icon-only cluster. Import/Export live in the overflow menu so the
-        // header stays uncluttered.
+        // Quiet icon-only cluster. Import/Export/Progress live in the overflow menu.
         LinearLayout toggles = horizontal();
         themePill = new HeaderIconButton(this, "theme");
         themePill.setOnClickListener(v -> cycleTheme());
@@ -767,8 +985,8 @@ public final class MainActivity extends Activity {
         HeaderIconButton more = new HeaderIconButton(this, "more");
         more.setContentDescription("More options");
         more.setOnClickListener(this::showOverflowMenu);
-        toggles.addView(themePill, wrap(0, 0, 12, 0));
-        toggles.addView(handPill, wrap(0, 0, 12, 0));
+        toggles.addView(themePill, wrap(0, 0, 0, 0));
+        toggles.addView(handPill, wrap(0, 0, 0, 0));
         toggles.addView(more, wrap(0, 0, 0, 0));
         header.addView(toggles, wrap(0, 0, 0, 0));
         return header;
@@ -776,13 +994,17 @@ public final class MainActivity extends Activity {
 
     private void showOverflowMenu(View anchor) {
         PopupMenu menu = new PopupMenu(themedContext(), anchor);
-        menu.getMenu().add(0, 1, 0, "Import CSV");
-        menu.getMenu().add(0, 2, 1, "Export CSV");
-        menu.getMenu().add(0, 3, 2, "How it works");
-        menu.getMenu().add(0, 4, 3, "Sync with web");
-        menu.getMenu().add(0, 5, 4, "Sync now");
+        menu.getMenu().add(0, 6, 0, "Progress");
+        menu.getMenu().add(0, 1, 1, "Import CSV");
+        menu.getMenu().add(0, 2, 2, "Export CSV");
+        menu.getMenu().add(0, 3, 3, "How it works");
+        menu.getMenu().add(0, 4, 4, "Sync with web");
+        menu.getMenu().add(0, 5, 5, "Sync now");
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
+                case 6:
+                    showProgress();
+                    return true;
                 case 1:
                     startCsvImport();
                     return true;
@@ -1055,42 +1277,42 @@ public final class MainActivity extends Activity {
     }
 
     private void addActZone() {
-        fab = new TextView(this);
-        TextView fabText = (TextView) fab;
-        fabText.setText("+");
-        fabText.setTextSize(28);
-        fabText.setTypeface(Typeface.DEFAULT_BOLD);
-        fabText.setTextColor(palette.accentInk);
-        fabText.setGravity(Gravity.CENTER);
-        fabText.setIncludeFontPadding(false);
+        fab = new View(this);
         GradientDrawable fabBg = new GradientDrawable();
+        fabBg.setShape(GradientDrawable.OVAL);
         fabBg.setColor(palette.accent);
-        fabBg.setCornerRadius(dp(22));
-        fab.setBackground(fabBg);
+        fabBg.setStroke(Math.max(1, dp(1)), PriorityPalette.withAlpha(palette.accentInk, 0x33));
+        LayerDrawable fabLayers = new LayerDrawable(new Drawable[]{
+                fabBg, new Glyph(Glyph.PLUS, dp(24), palette.accentInk, 2.4f)});
+        int plusInset = dp((FAB_SIZE - 24) / 2);
+        fabLayers.setLayerInset(1, plusInset, plusInset, plusInset, plusInset);
+        fab.setBackground(fabLayers);
         fab.setElevation(dp(8));
-        fab.setOnClickListener(v -> openAddSheet());
-        FrameLayout.LayoutParams fabParams = new FrameLayout.LayoutParams(dp(60), dp(60));
+        fab.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams fabParams = new FrameLayout.LayoutParams(dp(FAB_SIZE), dp(FAB_SIZE));
         fabParams.gravity = Gravity.BOTTOM | horizontalGravityForAddButton();
-        fabParams.bottomMargin = dp(84);
+        // Right/left: the + sits beside the list dock. Center: it floats just above it.
+        fabParams.bottomMargin = dp(HAND_CENTER.equals(hand)
+                ? DOCK_BOTTOM + DOCK_HEIGHT + 12 : DOCK_BOTTOM);
         if (HAND_RIGHT.equals(hand)) {
-            fabParams.rightMargin = dp(20);
+            fabParams.rightMargin = dp(DOCK_EDGE);
         } else if (HAND_LEFT.equals(hand)) {
-            fabParams.leftMargin = dp(20);
+            fabParams.leftMargin = dp(DOCK_EDGE);
         }
         root.addView(fab, fabParams);
 
+        // Transparent touch target above the visual button: tap adds, long-press drags.
         fabTarget = new View(this);
         fabTarget.setContentDescription("Add task");
         fabTarget.setOnClickListener(v -> openAddSheet());
         fabTarget.setOnTouchListener(this::handleFabTouch);
-        FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(dp(60), dp(60));
+        fabTarget.setElevation(dp(9));
+        FrameLayout.LayoutParams targetParams = new FrameLayout.LayoutParams(dp(FAB_SIZE), dp(FAB_SIZE));
         targetParams.gravity = fabParams.gravity;
         targetParams.bottomMargin = fabParams.bottomMargin;
         targetParams.leftMargin = fabParams.leftMargin;
         targetParams.rightMargin = fabParams.rightMargin;
         root.addView(fabTarget, targetParams);
-
-
     }
 
     private int horizontalGravityForAddButton() {
@@ -1243,19 +1465,41 @@ public final class MainActivity extends Activity {
     private void renderAll(boolean animateReorder) {
         sortTasks();
         long now = System.currentTimeMillis();
-        List<TodoTask> active = activeTasks(now);
+        String listFilter = "All".equals(activeCat) ? null : activeCat;
+        boolean searching = !searchQuery.isEmpty();
+
+        // The top zone is global: your #1 across every list and overall progress.
+        List<TodoTask> activeEverywhere = TaskViews.select(tasks, null, false, VIEW_ACTIVE, "", now);
+        int laterEverywhere = TaskViews.select(tasks, null, false, VIEW_LATER, "", now).size();
         int done = 0;
         for (TodoTask t : tasks) {
-            if (t.completed && inActiveCat(t)) done++;
+            if (t.completed) done++;
         }
-        int remaining = active.size();
-        int total = remaining + done;
+        int toGo = activeEverywhere.size();
+        int total = toGo + laterEverywhere + done;
         int pct = total == 0 ? 0 : Math.round((done / (float) total) * 100f);
+        globalRanks.clear();
+        for (int i = 0; i < activeEverywhere.size(); i++) {
+            globalRanks.put(activeEverywhere.get(i).id, i);
+        }
+        globalRankTotal = activeEverywhere.size();
+        TodoTask mit = searching || activeEverywhere.isEmpty() ? null : activeEverywhere.get(0);
 
-        TodoTask mit = active.isEmpty() ? null : active.get(0);
-        int heroAccent = PriorityPalette.spectrumColor(0, active.size(), isNightEffective());
+        // The bottom zone is the selected list, without repeating the hero task.
+        List<TodoTask> listed = TaskViews.select(tasks, listFilter, false, VIEW_ACTIVE, searchQuery, now);
+        int inList = listed.size();
+        if (mit != null) {
+            listed.remove(mit);
+        }
+        List<TodoTask> later = TaskViews.select(tasks, listFilter, false, VIEW_LATER, searchQuery, now);
 
-        headerSubView.setText(remaining + " to go  ·  " + done + " done");
+        if (searching) {
+            int matches = inList + later.size();
+            headerSubView.setText(matches + (matches == 1 ? " match" : " matches"));
+        } else {
+            headerSubView.setText(toGo + " to go  ·  " + done + " done"
+                    + (laterEverywhere > 0 ? "  ·  " + laterEverywhere + " later" : ""));
+        }
         if (handPill != null) {
             handPill.setState(hand, theme);
         }
@@ -1263,17 +1507,10 @@ public final class MainActivity extends Activity {
             themePill.setState(hand, theme);
         }
         renderCategoryStrip();
-
-        listFilterLabel.setText((recurringOnly ? "Recurring" : activeCat) + "  ▾");
-        boolean stats = "Stats".equals(currentScreen);
-        boolean focus = "Focus".equals(currentScreen);
-        listHeaderView.setVisibility(stats || focus ? View.GONE : View.VISIBLE);
-        listContainer.setVisibility(stats || focus ? View.GONE : View.VISIBLE);
-        if (stats) renderStats();
-        else {
-            renderHero(mit, heroAccent, pct, done, total);
-            renderList(active, animateReorder);
-        }
+        listFilterLabel.setText(activeCat + " (" + inList + ")");
+        renderHero(mit, pct, done, total, laterEverywhere, inList + later.size());
+        renderList(listed, inList, animateReorder);
+        renderLater(later);
         scheduleReminderPriorityRefresh(now);
     }
 
@@ -1298,51 +1535,75 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void renderHero(TodoTask mit, int accent, int pct, int done, int total) {
+    private int rankColor(TodoTask task, int fallbackRank) {
+        Integer rank = globalRanks.get(task.id);
+        int resolved = rank != null ? rank : fallbackRank;
+        return PriorityPalette.spectrumColor(resolved, Math.max(globalRankTotal, resolved + 1),
+                isNightEffective());
+    }
+
+    private LinearLayout kickerRow(int dotColor, String label, int labelColor, String trailing) {
+        LinearLayout row = horizontal();
+        View marker = dot(6, dotColor, false);
+        ((LinearLayout.LayoutParams) marker.getLayoutParams()).rightMargin = dp(7);
+        row.addView(marker);
+        TextView kicker = text(label, 11, 800, labelColor);
+        kicker.setLetterSpacing(0.1f);
+        kicker.setSingleLine(true);
+        row.addView(kicker, weight(1, 0, 0, 6, 0));
+        if (trailing != null) {
+            progressText = text(trailing, 11, 600, palette.heroSub);
+            row.addView(progressText, wrap(0, 0, 0, 0));
+        }
+        return row;
+    }
+
+    private void renderHero(TodoTask mit, int pct, int done, int total, int laterCount, int matches) {
         heroContainer.removeAllViews();
+        int accent = PriorityPalette.spectrumColor(0, Math.max(1, globalRankTotal), isNightEffective());
+        boolean searching = !searchQuery.isEmpty();
         LinearLayout card = vertical();
-        card.setPadding(dp(17), dp(16), dp(17), dp(16));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(palette.surface);
-        bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(1), palette.line);
-        card.setBackground(bg);
+        card.setPadding(dp(18), dp(16), dp(8), dp(16));
+        card.setBackground(cardBackground(20));
         card.setClipToOutline(true);
 
-        LinearLayout progressRow = horizontal();
-        FrameLayout track = new FrameLayout(this);
-        GradientDrawable trackBg = new GradientDrawable();
-        trackBg.setColor(PriorityPalette.withAlpha(palette.heroInk, 0x17));
-        trackBg.setCornerRadius(dp(3));
-        track.setBackground(trackBg);
-        progressFill = new View(this);
-        GradientDrawable fillBg = new GradientDrawable();
-        fillBg.setColor(accent);
-        fillBg.setCornerRadius(dp(3));
-        progressFill.setBackground(fillBg);
-        track.addView(progressFill, new FrameLayout.LayoutParams(0, dp(5)));
-        LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(0, dp(5), 1f);
-        trackParams.rightMargin = 0;
-        trackParams.gravity = Gravity.CENTER_VERTICAL;
-        progressRow.addView(track, trackParams);
-        progressText = text(done + " of " + total + " done", 11, 700, palette.heroSub);
+        if (searching) {
+            card.setPadding(dp(18), dp(16), dp(18), dp(16));
+            card.addView(kickerRow(palette.info, "SEARCH", palette.info, null), matchWrap(0, 0, 0, 8));
+            TextView query = text("“" + searchQuery + "”", 20, 800, palette.heroInk);
+            query.setMaxLines(2);
+            query.setEllipsize(TextUtils.TruncateAt.END);
+            card.addView(query);
+            card.addView(text(matches == 0 ? "No matching tasks. Try another word or clear the search."
+                    : matches + (matches == 1 ? " matching task below." : " matching tasks below."),
+                    13, 500, palette.heroSub), matchWrap(0, 6, 0, 0));
+            heroContainer.addView(card, matchWrap(0, 0, 0, 0));
+            return;
+        }
 
-        card.addView(progressRow, matchWrap(-17, -16, -17, 14));
-        final int pctFinal = pct;
-        final FrameLayout trackRef = track;
-        final View fillRef = progressFill;
-        track.post(() -> {
-            int w = Math.round(trackRef.getWidth() * (pctFinal / 100f));
-            ViewGroup.LayoutParams lp = fillRef.getLayoutParams();
-            lp.width = w;
-            fillRef.setLayoutParams(lp);
-        });
+        // 4dp progress rail along the card's top edge.
+        LinearLayout track = horizontal();
+        track.setBackgroundColor(PriorityPalette.withAlpha(palette.heroInk, 0x12));
+        progressFill = new View(this);
+        progressFill.setBackground(rounded(accent, 2));
+        track.addView(progressFill, new LinearLayout.LayoutParams(0, dp(4), pct));
+        track.addView(new View(this), new LinearLayout.LayoutParams(0, dp(4), Math.max(0, 100 - pct)));
+        LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(4));
+        trackParams.setMargins(-dp(18), -dp(16), -dp(8), dp(14));
+        card.addView(track, trackParams);
+        String progress = done + " of " + total + " done";
 
         if (mit == null) {
-            TextView clear = text(!searchQuery.isEmpty() ? "No matching tasks" : "Later".equals(currentScreen) ? "Nothing for later" : "All clear for today", 21, 800, palette.heroInk);
-            TextView hint = text(!searchQuery.isEmpty() ? "Try another search or clear the filter." : "Later".equals(currentScreen) ? "Swipe away from your thumb to save a task here." : "Add a task and it sorts itself to the top.", 13, 600, palette.heroSub);
-            card.addView(clear);
-            card.addView(hint, matchWrap(0, 6, 0, 0));
+            card.setPadding(dp(18), dp(16), dp(18), dp(18));
+            trackParams.setMargins(-dp(18), -dp(16), -dp(18), dp(14));
+            card.addView(kickerRow(palette.done, "ALL CLEAR", palette.done, total > 0 ? progress : null),
+                    matchWrap(0, 0, 0, 8));
+            card.addView(text("Nothing urgent right now", 20, 800, palette.heroInk));
+            String hint = laterCount > 0
+                    ? laterCount + (laterCount == 1 ? " task is" : " tasks are") + " waiting in Later. Tap + to add more."
+                    : "Tap + to add a task. It sorts itself to the top.";
+            card.addView(text(hint, 13, 500, palette.heroSub), matchWrap(0, 6, 0, 0));
             heroContainer.addView(card, matchWrap(0, 0, 0, 0));
             return;
         }
@@ -1357,34 +1618,51 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout heroFg = vertical();
+        heroFg.setBackgroundColor(palette.surface);
         boolean heroExpanded = isTaskExpanded("hero", mit.id);
         if (heroExpanded) {
             heroFg.setContentDescription("Expanded content for " + mit.title);
         }
-        TextView kicker = text("YOUR #1 RIGHT NOW", 11, 800, accent);
-        kicker.setLetterSpacing(0.1f);
-        LinearLayout kickerRow = horizontal();
-        kickerRow.addView(kicker, weight(1, 0, 0, 6, 0));
-        kickerRow.addView(progressText, wrap(0, 0, 0, 0));
-        heroFg.addView(kickerRow, matchWrap(0, 0, 0, 9));
+        LinearLayout kicker = kickerRow(accent, "YOUR #1 RIGHT NOW", accent, progress);
+        heroFg.addView(kicker, matchWrap(0, 0, 10, 6));
 
-        TextView mitName = text(mit.title, 23, 800, palette.heroInk);
+        LinearLayout titleRow = horizontal();
+        titleRow.setGravity(Gravity.TOP);
+        TextView mitName = text(mit.title, 21, 800, palette.heroInk);
+        mitName.setLetterSpacing(-0.01f);
         mitName.setSingleLine(false);
         mitName.setMaxLines(heroExpanded ? Integer.MAX_VALUE : 3);
         mitName.setEllipsize(heroExpanded ? null : TextUtils.TruncateAt.END);
-        heroFg.addView(mitName);
+        titleRow.addView(mitName, weight(1, 0, 0, 2, 0));
+        LinearLayout.LayoutParams ringParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        ringParams.topMargin = -dp(10);
+        titleRow.addView(completionTarget(mit, accent, 22), ringParams);
+        heroFg.addView(titleRow, matchWrap(0, 0, 0, 0));
 
         if (heroExpanded && !TextUtils.isEmpty(mit.notes)) {
             TextView notes = text(mit.notes, 13, 500, palette.heroSub);
             notes.setMaxLines(6);
             notes.setEllipsize(TextUtils.TruncateAt.END);
-            heroFg.addView(notes, matchWrap(0, 8, 0, 0));
+            heroFg.addView(notes, matchWrap(0, 4, 10, 0));
         }
 
-        if (mit.reminderAt > 0) {
-            TextView remind = chipText(reminderShort(mit), accent,
-                    PriorityPalette.withAlpha(accent, 0x26));
-            heroFg.addView(remind, matchWrap(0, 11, 0, 0));
+        boolean hasReminder = mit.reminderAt > 0;
+        if (hasReminder || mit.category != null) {
+            LinearLayout meta = horizontal();
+            if (hasReminder) {
+                TextView remind = text(reminderShort(mit), 12, 700, accent);
+                remind.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        new Glyph(Glyph.CLOCK, dp(14), accent), null, null, null);
+                remind.setCompoundDrawablePadding(dp(6));
+                remind.setIncludeFontPadding(false);
+                remind.setPadding(dp(10), dp(6), dp(12), dp(6));
+                remind.setBackground(rounded(PriorityPalette.withAlpha(accent, 0x1F), 999));
+                meta.addView(remind, wrap(0, 0, 8, 0));
+            }
+            if (mit.category != null) {
+                meta.addView(new TagView(mit.category, palette.sub), wrap(0, 0, 0, 0));
+            }
+            heroFg.addView(meta, matchWrap(0, heroExpanded ? 12 : 6, 0, 0));
         }
         heroWrap.addView(heroFg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
@@ -1394,7 +1672,37 @@ public final class MainActivity extends Activity {
         heroContainer.addView(card, matchWrap(0, 0, 0, 0));
     }
 
-    private void renderList(List<TodoTask> active, boolean animateReorder) {
+    /** 48dp tap target around a small rank-colored completion ring. */
+    private FrameLayout completionTarget(TodoTask task, int color, int ringDp) {
+        CheckBox circle = new CheckBox(this);
+        circle.setButtonDrawable(null);
+        circle.setText("");
+        circle.setMinWidth(0);
+        circle.setMinHeight(0);
+        circle.setPadding(0, 0, 0, 0);
+        circle.setContentDescription("Complete task: " + task.title);
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setColor(Color.TRANSPARENT);
+        ring.setStroke(dp(2), color);
+        circle.setBackground(ring);
+        circle.setOnClickListener(v -> {
+            int[] loc = new int[2];
+            int[] rootLoc = new int[2];
+            v.getLocationOnScreen(loc);
+            root.getLocationOnScreen(rootLoc);
+            float cx = loc[0] - rootLoc[0] + v.getWidth() / 2f;
+            float cy = loc[1] - rootLoc[1] + v.getHeight() / 2f;
+            confettiView.burst(cx, cy, CONFETTI_COLORS);
+            completeTask(task.id);
+        });
+        FrameLayout target = new FrameLayout(this);
+        target.setOnClickListener(v -> circle.performClick());
+        target.addView(circle, new FrameLayout.LayoutParams(dp(ringDp), dp(ringDp), Gravity.CENTER));
+        return target;
+    }
+
+    private void renderList(List<TodoTask> listed, int inListCount, boolean animateReorder) {
         rowTops.clear();
         if (animateReorder) {
             for (int i = 0; i < listContainer.getChildCount(); i++) {
@@ -1407,15 +1715,25 @@ public final class MainActivity extends Activity {
         }
         listContainer.removeAllViews();
 
-        if (active.isEmpty()) {
-            TextView empty = text("Nothing in the index yet.", 14, 600, palette.sub);
-            empty.setGravity(Gravity.CENTER_HORIZONTAL);
-            listContainer.addView(empty, matchWrap(0, 24, 0, 0));
+        if (listed.isEmpty()) {
+            String message;
+            if (!searchQuery.isEmpty()) {
+                message = "No tasks match this search.";
+            } else if (inListCount > 0) {
+                message = "Only your #1 is here right now.";
+            } else if (!"All".equals(activeCat)) {
+                message = "Nothing in " + activeCat + " yet.";
+            } else {
+                message = "Nothing in the index yet.";
+            }
+            TextView empty = text(message, 13, 600, palette.sub);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(20), dp(22), dp(20), dp(22));
+            listContainer.addView(empty, matchWrap(0, 0, 0, 0));
             return;
         }
-        int rankTotal = active.size();
-        for (int i = 0; i < rankTotal; i++) {
-            listContainer.addView(buildRow(active.get(i), i, rankTotal), matchWrap(0, 0, 0, 0));
+        for (int i = 0; i < listed.size(); i++) {
+            listContainer.addView(buildRow(listed.get(i), i, i == listed.size() - 1), matchWrap(0, 0, 0, 0));
         }
 
         if (animateReorder && !rowTops.isEmpty()) {
@@ -1441,8 +1759,38 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private FrameLayout buildRow(TodoTask task, int rank, int total) {
-        int tier = PriorityPalette.spectrumColor(rank, total, isNightEffective());
+    /** Collapsible "Later" section: tasks swiped away from the thumb wait here. */
+    private void renderLater(List<TodoTask> later) {
+        laterHeaderView.removeAllViews();
+        laterContainer.removeAllViews();
+        boolean any = !later.isEmpty();
+        laterHeaderView.setVisibility(any ? View.VISIBLE : View.GONE);
+        laterContainer.setVisibility(any && laterExpanded ? View.VISIBLE : View.GONE);
+        if (!any) {
+            return;
+        }
+        View clock = glyphView(Glyph.CLOCK, 14, palette.later);
+        ((LinearLayout.LayoutParams) clock.getLayoutParams()).rightMargin = dp(6);
+        laterHeaderView.addView(clock);
+        TextView label = text("LATER", 11, 800, palette.later);
+        label.setLetterSpacing(0.08f);
+        laterHeaderView.addView(label, wrap(0, 0, 8, 0));
+        laterHeaderView.addView(countBadge(String.valueOf(later.size()),
+                PriorityPalette.withAlpha(palette.later, 0x26), palette.later), wrap(0, 0, 0, 0));
+        laterHeaderView.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        laterHeaderView.addView(text(laterExpanded ? "Hide" : "Show", 12, 700, palette.sub), wrap(0, 0, 2, 0));
+        laterHeaderView.addView(glyphView(laterExpanded ? Glyph.EXPAND_LESS : Glyph.EXPAND_MORE, 18, palette.sub));
+        laterHeaderView.setContentDescription((laterExpanded ? "Hide " : "Show ")
+                + later.size() + (later.size() == 1 ? " task in Later section" : " tasks in Later section"));
+        if (laterExpanded) {
+            for (int i = 0; i < later.size(); i++) {
+                laterContainer.addView(buildRow(later.get(i), i, i == later.size() - 1), matchWrap(0, 0, 0, 0));
+            }
+        }
+    }
+
+    private FrameLayout buildRow(TodoTask task, int position, boolean last) {
+        int tier = task.snoozed ? palette.later : rankColor(task, position);
 
         FrameLayout wrap = new FrameLayout(this);
         wrap.setTag(task.id);
@@ -1456,72 +1804,62 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout fg = horizontal();
-        fg.setPadding(dp(8), dp(8), dp(16), dp(8));
-        fg.setMinimumHeight(dp(64));
+        fg.setPadding(dp(2), dp(7), dp(14), dp(7));
+        fg.setMinimumHeight(dp(60));
         fg.setBackgroundColor(palette.surface);
-        GradientDrawable bottomLine = new GradientDrawable();
-        bottomLine.setColor(palette.surface);
-        // hairline divider drawn via a thin bottom view
-        CheckBox circle = new CheckBox(this);
-        circle.setButtonDrawable(null);
-        circle.setText("");
-        circle.setMinWidth(0);
-        circle.setMinHeight(0);
-        circle.setPadding(0, 0, 0, 0);
-        circle.setContentDescription("Complete task");
-        GradientDrawable circleBg = new GradientDrawable();
-        circleBg.setShape(GradientDrawable.OVAL);
-        circleBg.setColor(PriorityPalette.withAlpha(tier, 0x26));
-        circleBg.setStroke(dp(2), tier);
-        circle.setBackground(circleBg);
-        circle.setClickable(true);
-        circle.setOnClickListener(v -> {
-            int[] loc = new int[2];
-            int[] rootLoc = new int[2];
-            v.getLocationOnScreen(loc);
-            root.getLocationOnScreen(rootLoc);
-            float cx = loc[0] - rootLoc[0] + v.getWidth() / 2f;
-            float cy = loc[1] - rootLoc[1] + v.getHeight() / 2f;
-            confettiView.burst(cx, cy, CONFETTI_COLORS);
-            completeTask(task.id);
-        });
         boolean rowExpanded = isTaskExpanded("row", task.id);
-        FrameLayout circleTarget = new FrameLayout(this);
-        circleTarget.setOnClickListener(v -> circle.performClick());
-        circleTarget.addView(circle, new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER));
         LinearLayout.LayoutParams targetParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         targetParams.gravity = rowExpanded ? Gravity.TOP : Gravity.CENTER_VERTICAL;
-        fg.addView(circleTarget, targetParams);
+        fg.addView(completionTarget(task, tier, 20), targetParams);
 
         LinearLayout copy = vertical();
         if (rowExpanded) {
             copy.setContentDescription("Expanded content for " + task.title);
         }
-        TextView name = text(task.title, 16, 600, palette.ink);
+        LinearLayout titleLine = horizontal();
+        titleLine.setGravity(rowExpanded ? Gravity.TOP : Gravity.CENTER_VERTICAL);
+        TextView name = text(task.title, 15, position == 0 && !task.snoozed ? 600 : 500,
+                task.snoozed ? palette.sub : palette.ink);
         name.setSingleLine(!rowExpanded);
         name.setMaxLines(rowExpanded ? Integer.MAX_VALUE : 1);
         name.setEllipsize(rowExpanded ? null : TextUtils.TruncateAt.END);
-        copy.addView(name);
-
-        if (!TextUtils.isEmpty(task.notes)) {
-            TextView notes = text(task.notes, 13, 500, palette.sub);
-            notes.setMaxLines(rowExpanded ? 4 : 1);
-            notes.setEllipsize(TextUtils.TruncateAt.END);
-            copy.addView(notes, matchWrap(0, 7, 0, 0));
+        titleLine.addView(name, weight(1, 0, 0, 8, 0));
+        if ("All".equals(activeCat) && task.category != null) {
+            titleLine.addView(new TagView(task.category, tier), wrap(0, rowExpanded ? 3 : 0, 0, 0));
         }
+        copy.addView(titleLine, matchWrap(0, 0, 0, 0));
 
-        if (task.reminderAt > 0) {
-            LinearLayout metaRow = horizontal();
-            TextView meta = text("⏰ " + reminderShort(task), 11, 600, palette.sub);
-            metaRow.addView(meta, wrap(0, 0, 0, 0));
-            copy.addView(metaRow, matchWrap(0, 4, 0, 0));
+        boolean hasNotes = !TextUtils.isEmpty(task.notes);
+        if (task.reminderAt > 0 || (hasNotes && !rowExpanded)) {
+            LinearLayout meta = horizontal();
+            if (task.reminderAt > 0) {
+                boolean overdue = task.reminderAt < System.currentTimeMillis();
+                int whenColor = overdue ? PriorityPalette.IMMEDIATE : palette.sub;
+                TextView when = text(reminderShort(task), 11, 600, whenColor);
+                when.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        new Glyph(Glyph.CLOCK, dp(12), whenColor), null, null, null);
+                when.setCompoundDrawablePadding(dp(4));
+                when.setSingleLine(true);
+                meta.addView(when, wrap(0, 0, 8, 0));
+            }
+            if (hasNotes && !rowExpanded) {
+                TextView notes = text(task.notes, 12, 500, palette.sub);
+                notes.setSingleLine(true);
+                notes.setEllipsize(TextUtils.TruncateAt.END);
+                meta.addView(notes, weight(1, 0, 0, 0, 0));
+            }
+            copy.addView(meta, matchWrap(0, 3, 0, 0));
+        }
+        if (hasNotes && rowExpanded) {
+            TextView notes = text(task.notes, 13, 500, palette.sub);
+            notes.setMaxLines(6);
+            notes.setEllipsize(TextUtils.TruncateAt.END);
+            copy.addView(notes, matchWrap(0, 6, 0, 0));
         }
         fg.addView(copy, weight(1, 0, 0, 0, 0));
         if (task.snoozed) {
-            TextView restore = text("↶", 22, 700, palette.later);
-            restore.setGravity(Gravity.CENTER);
-            restore.setMinWidth(dp(44));
-            restore.setMinHeight(dp(44));
+            View restore = new View(this);
+            restore.setBackground(new Glyph(Glyph.UNDO, dp(20), palette.later));
             restore.setContentDescription("Restore task: " + task.title);
             restore.setOnClickListener(v -> {
                 task.snoozed = false;
@@ -1529,18 +1867,21 @@ public final class MainActivity extends Activity {
                 persistMutation();
                 renderAll(true);
             });
-            fg.addView(restore);
+            fg.addView(restore, new LinearLayout.LayoutParams(dp(44), dp(44)));
         }
 
         wrap.addView(fg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
 
-        View divider = new View(this);
-        divider.setBackgroundColor(palette.line);
-        FrameLayout.LayoutParams divParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1)));
-        divParams.gravity = Gravity.BOTTOM;
-        wrap.addView(divider, divParams);
+        if (!last) {
+            View divider = new View(this);
+            divider.setBackgroundColor(palette.line);
+            FrameLayout.LayoutParams divParams = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1)));
+            divParams.gravity = Gravity.BOTTOM;
+            divParams.leftMargin = dp(50);
+            wrap.addView(divider, divParams);
+        }
 
         attachRowSwipe(fg, reveal, task.id);
         return wrap;
@@ -1727,6 +2068,8 @@ public final class MainActivity extends Activity {
     private void laterTask(String id) {
         TodoTask task = findTask(id);
         if (task == null || task.snoozed) {
+            // Re-render so a row swiped off-screen inside the Later section snaps back.
+            renderAll(false);
             return;
         }
         task.snoozed = true;
@@ -1795,7 +2138,7 @@ public final class MainActivity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        lp.bottomMargin = dp(96);
+        lp.bottomMargin = dp(HAND_CENTER.equals(hand) ? 148 : 82);
         toastView = bar;
         root.addView(toastView, lp);
 
@@ -1827,7 +2170,7 @@ public final class MainActivity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        lp.bottomMargin = dp(108);
+        lp.bottomMargin = dp(HAND_CENTER.equals(hand) ? 152 : 86);
         cheerView = chip;
         root.addView(cheerView, lp);
         cheerDismiss = this::dismissCheer;
@@ -1899,22 +2242,22 @@ public final class MainActivity extends Activity {
     }
 
     private boolean inActiveCat(TodoTask task) {
-        return ("All".equals(activeCat) || activeCat.equals(task.category))
-                && (!recurringOnly || (task.reminderAt > 0 && !TodoTask.REPEAT_NONE.equals(task.reminderRepeatUnit)));
+        return "All".equals(activeCat) || activeCat.equals(task.category);
     }
 
     private List<String> tabList() {
         List<String> out = new ArrayList<>();
         out.add("All");
-        out.add("Recurring");
         out.addAll(categories);
         return out;
     }
 
+    /** Active (not completed, not Later) tasks in a list. */
     private int catCount(String name) {
         int count = 0;
         for (TodoTask task : tasks) {
-            if (!task.completed && ("All".equals(name) || name.equals(task.category))) {
+            if (!task.completed && !task.snoozed
+                    && ("All".equals(name) || name.equals(task.category))) {
                 count++;
             }
         }
@@ -1926,71 +2269,73 @@ public final class MainActivity extends Activity {
             return;
         }
         catStrip.removeAllViews();
-        LinearLayout dock = horizontal();
-        TextView previous = text("‹", 26, 600, palette.sub);
-        previous.setGravity(Gravity.CENTER);
-        previous.setContentDescription("Previous list");
-        previous.setOnClickListener(v -> stepNavigationList(-1));
-        dock.addView(previous, new LinearLayout.LayoutParams(dp(32), dp(48)));
+        catStrip.addView(dockChevron(Glyph.CHEVRON_LEFT, "Previous list", -1),
+                new LinearLayout.LayoutParams(dp(32), LinearLayout.LayoutParams.MATCH_PARENT));
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.setHorizontalFadingEdgeEnabled(true);
+        scroll.setFadingEdgeLength(dp(14));
         LinearLayout row = horizontal();
         View selected = null;
-        List<String> tabs = tabList();
-        for (int i = 0; i < tabs.size(); i++) {
-            String name = tabs.get(i);
-            View tab = buildCatTab(name, i == 1);
-            if ((recurringOnly && i == 1) || (!recurringOnly && i != 1 && name.equals(activeCat))) selected = tab;
-            row.addView(tab, wrap(0, 0, 4, 0));
+        for (String name : tabList()) {
+            View tab = buildCatTab(name);
+            if (name.equals(activeCat)) {
+                selected = tab;
+            }
+            row.addView(tab, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT));
         }
-        scroll.addView(row);
-        dock.addView(scroll, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        scroll.addView(row, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        catStrip.addView(scroll, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
         final View selectedTab = selected;
-        if (selectedTab != null) scroll.post(() -> scroll.smoothScrollTo(Math.max(0,
-                selectedTab.getLeft() - (scroll.getWidth() - selectedTab.getWidth()) / 2), 0));
-        TextView next = text("›", 26, 600, palette.sub);
-        next.setGravity(Gravity.CENTER);
-        next.setContentDescription("Next list");
-        next.setOnClickListener(v -> stepNavigationList(1));
-        dock.addView(next, new LinearLayout.LayoutParams(dp(32), dp(48)));
-        catStrip.addView(dock);
+        if (selectedTab != null) {
+            scroll.post(() -> scroll.scrollTo(Math.max(0,
+                    selectedTab.getLeft() - (scroll.getWidth() - selectedTab.getWidth()) / 2), 0));
+        }
+        catStrip.addView(dockChevron(Glyph.CHEVRON_RIGHT, "Next list", 1),
+                new LinearLayout.LayoutParams(dp(32), LinearLayout.LayoutParams.MATCH_PARENT));
     }
 
-    private View buildCatTab(String name, boolean recurring) {
-        boolean active = recurring ? recurringOnly : !recurringOnly && name.equals(activeCat);
+    private View dockChevron(String kind, String description, int direction) {
+        View chevron = new View(this);
+        chevron.setBackground(new Glyph(kind, dp(18), palette.sub, 2.2f));
+        chevron.setContentDescription(description);
+        chevron.setOnClickListener(v -> stepNavigationList(direction));
+        return chevron;
+    }
+
+    private View buildCatTab(String name) {
+        boolean active = name.equals(activeCat);
         LinearLayout tab = horizontal();
-        tab.setPadding(dp(12), dp(7), dp(12), dp(7));
-        tab.setMinimumHeight(dp(44));
-        tab.setContentDescription((recurring ? "Recurring tasks" : "List: " + name));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(999));
+        tab.setGravity(Gravity.CENTER);
+        tab.setPadding(dp(active ? 12 : 9), 0, dp(active ? 11 : 9), 0);
+        tab.setContentDescription("List: " + name);
+        tab.setSelected(active);
         if (active) {
-            bg.setColor(palette.accent);
-            bg.setStroke(dp(2), palette.accent);
-        } else {
-            bg.setColor(Color.TRANSPARENT);
-            bg.setStroke(dp(2), palette.line);
+            setBackgroundKeepPadding(tab, new InsetDrawable(rounded(palette.accent, 999), 0, dp(9), 0, dp(9)));
+            View marker = dot(6, isNightEffective() ? 0xFF008135 : 0xFF5CDF7B, false);
+            ((LinearLayout.LayoutParams) marker.getLayoutParams()).rightMargin = dp(6);
+            tab.addView(marker);
         }
-        tab.setBackground(bg);
-
-        TextView label = text(name, 13, active ? 800 : 700, active ? palette.accentInk : palette.sub);
+        TextView label = text(name, 13, active ? 700 : 600, active ? palette.accentInk : palette.sub);
         label.setIncludeFontPadding(false);
-        tab.addView(label, wrap(0, 0, 0, 0));
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setMaxWidth(dp(140));
+        tab.addView(label);
 
-        int n = recurring ? TaskViews.select(tasks, null, true, "Tasks", "", System.currentTimeMillis()).size() : catCount(name);
+        int n = catCount(name);
         if (n > 0) {
-            TextView badge = text(String.valueOf(n), 10, 800, active ? palette.accentInk : palette.sub);
-            badge.setIncludeFontPadding(false);
-            badge.setPadding(dp(5), dp(2), dp(5), dp(2));
-            GradientDrawable badgeBg = new GradientDrawable();
-            badgeBg.setCornerRadius(dp(999));
-            badgeBg.setColor(PriorityPalette.withAlpha(active ? palette.accentInk : palette.sub, 0x2E));
-            badge.setBackground(badgeBg);
+            TextView badge = countBadge(String.valueOf(n),
+                    active ? PriorityPalette.withAlpha(palette.accentInk, 0x33) : palette.chip,
+                    active ? palette.accentInk : palette.sub);
             tab.addView(badge, wrap(6, 0, 0, 0));
         }
 
-        tab.setOnClickListener(v -> selectNavigationList(name, recurring));
-        if (!"All".equals(name) && !recurring) {
+        tab.setOnClickListener(v -> selectNavigationList(name));
+        if (!"All".equals(name)) {
             tab.setOnLongClickListener(v -> {
                 confirmDeleteCat(name);
                 return true;
@@ -2445,29 +2790,29 @@ public final class MainActivity extends Activity {
 
     private void buildSheetContent(LinearLayout content) {
         View grip = new View(this);
-        GradientDrawable gripBg = new GradientDrawable();
-        gripBg.setColor(palette.line);
-        gripBg.setCornerRadius(dp(2));
-        grip.setBackground(gripBg);
-        LinearLayout.LayoutParams gripParams = new LinearLayout.LayoutParams(dp(40), dp(4));
+        grip.setBackground(rounded(palette.line, 2));
+        LinearLayout.LayoutParams gripParams = new LinearLayout.LayoutParams(dp(36), dp(4));
         gripParams.gravity = Gravity.CENTER_HORIZONTAL;
         gripParams.topMargin = dp(2);
-        gripParams.bottomMargin = dp(14);
+        gripParams.bottomMargin = dp(12);
         content.addView(grip, gripParams);
 
         LinearLayout titleRow = horizontal();
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 17, 800, palette.ink);
+        TextView title = text("edit".equals(sheetMode) ? "Edit task" : "New task", 18, 800, palette.ink);
+        title.setLetterSpacing(-0.015f);
         titleRow.addView(title, weight(1, 0, 0, 12, 0));
-        listPill = text("", 12, 700, palette.sub);
-        listPill.setGravity(Gravity.CENTER);
+        listPill = text("", 13, 600, palette.ink);
+        listPill.setGravity(Gravity.CENTER_VERTICAL);
         listPill.setSingleLine(true);
-        listPill.setMaxWidth(dp(120));
+        listPill.setMaxWidth(dp(150));
         listPill.setEllipsize(TextUtils.TruncateAt.END);
-        listPill.setPadding(dp(12), dp(8), dp(12), dp(8));
+        listPill.setMinHeight(dp(44));
+        listPill.setPadding(dp(12), 0, dp(8), 0);
+        listPill.setCompoundDrawablePadding(dp(2));
         listPill.setOnClickListener(v -> showListPicker());
         titleRow.addView(listPill, wrap(0, 0, 0, 0));
-        content.addView(titleRow, matchWrap(0, 0, 0, 13));
+        content.addView(titleRow, matchWrap(0, 0, 0, 10));
 
         sheetInput = new EditText(themedContext());
         sheetInput.setId(View.generateViewId());
@@ -2477,18 +2822,19 @@ public final class MainActivity extends Activity {
         sheetInput.setSingleLine(true);
         sheetInput.setImeOptions(notesExpanded ? EditorInfo.IME_ACTION_NEXT : EditorInfo.IME_ACTION_DONE);
         sheetInput.setTextSize(16);
+        applyFont(sheetInput, 600);
         sheetInput.setTextColor(palette.ink);
         sheetInput.setHintTextColor(palette.sub);
-        sheetInput.setPadding(dp(15), dp(14), dp(15), dp(14));
-        GradientDrawable inputBg = new GradientDrawable();
-        inputBg.setColor(palette.bg);
-        inputBg.setCornerRadius(dp(14));
-        inputBg.setStroke(dp(2), palette.line);
+        GradientDrawable inputBg = rounded(palette.bg, 14);
+        inputBg.setStroke(Math.max(1, dp(1)), palette.line);
         sheetInput.setBackground(inputBg);
         sheetInput.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
                 draftName = s.toString();
+                if (clearTitleButton != null) {
+                    clearTitleButton.setVisibility(s.length() > 0 ? View.VISIBLE : View.GONE);
+                }
                 updateCommitButtonState();
             }
             @Override public void afterTextChanged(Editable s) { }
@@ -2508,25 +2854,79 @@ public final class MainActivity extends Activity {
             return false;
         });
         FrameLayout titleField = new FrameLayout(this);
-        sheetInput.setPadding(dp(15), dp(14), dp(52), dp(14));
+        // Leave room for the inline reminder clock and clear button.
+        sheetInput.setPadding(dp(15), dp(15), dp(86), dp(15));
         titleField.addView(sheetInput, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-        TextView clearTitle = text("×", 22, 600, palette.sub);
-        clearTitle.setGravity(Gravity.CENTER);
-        clearTitle.setContentDescription("Clear task title");
-        clearTitle.setOnClickListener(v -> { sheetInput.setText(""); sheetInput.requestFocus(); });
-        titleField.addView(clearTitle, new FrameLayout.LayoutParams(dp(44), dp(48), Gravity.END | Gravity.CENTER_VERTICAL));
+        LinearLayout inlineActions = horizontal();
+        remindChip = new ReminderClockButton();
+        remindChip.setOnClickListener(v -> {
+            reminderSettingsOpen = !reminderSettingsOpen;
+            updateSheetDynamic();
+        });
+        inlineActions.addView(remindChip);
+        clearTitleButton = new View(this);
+        GradientDrawable clearDisc = new GradientDrawable();
+        clearDisc.setShape(GradientDrawable.OVAL);
+        clearDisc.setColor(palette.chip);
+        LayerDrawable clearIcon = new LayerDrawable(new Drawable[]{
+                clearDisc, new Glyph(Glyph.CLOSE, dp(14), palette.sub, 2.6f)});
+        clearIcon.setLayerInset(1, dp(4), dp(4), dp(4), dp(4));
+        clearTitleButton.setBackground(new InsetDrawable(clearIcon, dp(7), dp(11), dp(7), dp(11)));
+        clearTitleButton.setContentDescription("Clear task title");
+        clearTitleButton.setVisibility(draftName.isEmpty() ? View.GONE : View.VISIBLE);
+        clearTitleButton.setOnClickListener(v -> { sheetInput.setText(""); sheetInput.requestFocus(); });
+        inlineActions.addView(clearTitleButton, new LinearLayout.LayoutParams(dp(36), dp(44)));
+        FrameLayout.LayoutParams inlineParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END | Gravity.CENTER_VERTICAL);
+        inlineParams.rightMargin = dp(6);
+        titleField.addView(inlineActions, inlineParams);
         content.addView(titleField, matchWrap(0, 0, 0, 0));
         listPill.setAccessibilityTraversalAfter(sheetInput.getId());
 
-        addDetailsRow = text("＋  Add details", 13, 700, palette.sub);
+        // Chosen reminder, shown as a quiet blue pill with its own clear action.
+        reminderInfoRow = horizontal();
+        reminderInfoRow.setPadding(dp(12), 0, dp(2), 0);
+        reminderInfoRow.setMinimumHeight(dp(44));
+        setBackgroundKeepPadding(reminderInfoRow, new InsetDrawable(
+                rounded(PriorityPalette.withAlpha(palette.info, 0x17), 12), 0, dp(4), 0, dp(4)));
+        reminderInfoRow.setOnClickListener(v -> {
+            reminderSettingsOpen = !reminderSettingsOpen;
+            updateSheetDynamic();
+        });
+        View infoClock = glyphView(Glyph.CLOCK, 15, palette.info);
+        ((LinearLayout.LayoutParams) infoClock.getLayoutParams()).rightMargin = dp(8);
+        reminderInfoRow.addView(infoClock);
+        reminderSummary = text("", 13, 700, palette.info);
+        reminderSummary.setSingleLine(true);
+        reminderSummary.setEllipsize(TextUtils.TruncateAt.END);
+        reminderInfoRow.addView(reminderSummary, weight(1, 0, 0, 4, 0));
+        remindClear = new View(this);
+        remindClear.setBackground(new Glyph(Glyph.CLOSE, dp(16), palette.info, 2.4f));
+        remindClear.setContentDescription("Clear reminder");
+        remindClear.setOnClickListener(v -> {
+            draftReminderAt = 0;
+            draftRepeatUnit = TodoTask.REPEAT_NONE;
+            draftRepeatEvery = 1;
+            draftRepeatEveryText = "1";
+            draftRepeatEveryValid = true;
+            updateSheetDynamic();
+        });
+        reminderInfoRow.addView(remindClear, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        content.addView(reminderInfoRow, matchWrap(0, 4, 0, 0));
+
+        addDetailsRow = text("Add details", 13, 600, palette.sub);
+        addDetailsRow.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                new Glyph(Glyph.PLUS, dp(16), palette.sub, 2.4f), null, null, null);
+        addDetailsRow.setCompoundDrawablePadding(dp(8));
         addDetailsRow.setGravity(Gravity.CENTER_VERTICAL);
-        addDetailsRow.setMinHeight(dp(48));
-        addDetailsRow.setPadding(dp(15), 0, dp(15), 0);
+        addDetailsRow.setMinHeight(dp(44));
+        addDetailsRow.setPadding(dp(6), 0, dp(12), 0);
         addDetailsRow.setContentDescription("Add task details");
         addDetailsRow.setOnClickListener(v -> expandNotesEditor());
         addDetailsRow.setVisibility(notesExpanded ? View.GONE : View.VISIBLE);
-        content.addView(addDetailsRow, matchWrap(0, 4, 0, 0));
+        content.addView(addDetailsRow, wrap(0, 2, 0, 0));
 
         notesInput = new EditText(themedContext());
         notesInput.setHint("Details, links, steps…");
@@ -2541,8 +2941,8 @@ public final class MainActivity extends Activity {
         notesInput.setTextSize(14);
         notesInput.setTextColor(palette.ink);
         notesInput.setHintTextColor(palette.sub);
-        notesInput.setPadding(dp(15), dp(8), dp(15), dp(12));
-        notesInput.setBackgroundTintList(ColorStateList.valueOf(palette.line));
+        notesInput.setPadding(dp(15), dp(12), dp(15), dp(12));
+        notesInput.setBackground(rounded(palette.bg, 14));
         notesInput.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
@@ -2552,67 +2952,43 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable s) { }
         });
         notesInput.setVisibility(notesExpanded ? View.VISIBLE : View.GONE);
-        content.addView(notesInput, matchWrap(0, 0, 0, 0));
+        content.addView(notesInput, matchWrap(0, 8, 0, 0));
 
-        LinearLayout reminderRow = horizontal();
-        reminderRow.setGravity(Gravity.CENTER_VERTICAL);
-        remindChip = new ReminderClockButton();
-        remindChip.setOnClickListener(v -> {
-            reminderSettingsOpen = !reminderSettingsOpen;
-            updateSheetDynamic();
-        });
-        reminderRow.addView(remindChip, wrap(0, 0, 8, 0));
-        reminderSummary = text("", 12, 600, palette.sub);
-        reminderSummary.setMaxLines(2);
-        reminderSummary.setEllipsize(TextUtils.TruncateAt.END);
-        reminderRow.addView(reminderSummary, weight(1, 0, 0, 8, 0));
-        remindClear = text("×", 18, 700, palette.sub);
-        remindClear.setGravity(Gravity.CENTER);
-        remindClear.setMinWidth(dp(44));
-        remindClear.setMinHeight(dp(44));
-        remindClear.setContentDescription("Clear reminder");
-        GradientDrawable clearBg = new GradientDrawable();
-        clearBg.setColor(Color.TRANSPARENT);
-        clearBg.setCornerRadius(dp(12));
-        clearBg.setStroke(dp(2), palette.line);
-        remindClear.setBackground(clearBg);
-        remindClear.setOnClickListener(v -> {
-            draftReminderAt = 0;
-            draftRepeatUnit = TodoTask.REPEAT_NONE;
-            draftRepeatEvery = 1;
-            draftRepeatEveryText = "1";
-            draftRepeatEveryValid = true;
-            updateSheetDynamic();
-        });
-        reminderRow.addView(remindClear, wrap(0, 0, 0, 0));
-        content.addView(reminderRow, matchWrap(0, 8, 0, 0));
         reminderSettingsPanel = vertical();
-        reminderSettingsPanel.setPadding(dp(12), dp(8), dp(12), dp(10));
-        reminderSettingsPanel.setBackground(repeatControlBackground());
-        content.addView(reminderSettingsPanel, matchWrap(0, 6, 0, 0));
+        reminderSettingsPanel.setPadding(dp(12), dp(6), dp(6), dp(12));
+        GradientDrawable panelBg = rounded(palette.surface, 16);
+        panelBg.setStroke(Math.max(1, dp(1)), palette.line);
+        reminderSettingsPanel.setBackground(panelBg);
+        reminderSettingsPanel.setElevation(dp(3));
+        content.addView(reminderSettingsPanel, matchWrap(1, 8, 1, 2));
 
-        detailsToggle = text("", 12, 800, palette.accentInk);
+        // Pre-computed assumptions with one Adjust affordance (Impact, Effort, flags).
         LinearLayout toggleRow = horizontal();
-        GradientDrawable toggleBg = new GradientDrawable();
-        toggleBg.setColor(palette.bg);
-        toggleBg.setCornerRadius(dp(12));
-        toggleBg.setStroke(dp(2), PriorityPalette.withAlpha(palette.accent, 0x77));
-        toggleRow.setBackground(toggleBg);
-        toggleRow.setPadding(dp(14), dp(11), dp(14), dp(11));
-        toggleRow.setElevation(dp(3));
+        toggleRow.setBackground(rounded(palette.soft, 12));
+        toggleRow.setPadding(dp(12), dp(4), dp(4), dp(4));
+        toggleRow.setMinimumHeight(dp(48));
         toggleRow.setOnClickListener(v -> toggleDetailsAnimated());
         detailsSummary = text("", 12, 600, palette.sub);
-        toggleRow.addView(detailsSummary, weight(1, 0, 0, 12, 0));
+        detailsSummary.setMaxLines(2);
+        detailsSummary.setEllipsize(TextUtils.TruncateAt.END);
+        toggleRow.addView(detailsSummary, weight(1, 0, 0, 8, 0));
+        detailsToggle = text("", 13, 800, palette.info);
+        detailsToggle.setGravity(Gravity.CENTER);
+        detailsToggle.setMinHeight(dp(40));
+        detailsToggle.setPadding(dp(12), 0, dp(12), 0);
         toggleRow.addView(detailsToggle, wrap(0, 0, 0, 0));
-        content.addView(toggleRow, matchWrap(0, 12, 0, 0));
+        content.addView(toggleRow, matchWrap(0, 10, 0, 0));
 
         chipsContainer = vertical();
-        content.addView(chipsContainer, matchWrap(0, 12, 0, 0));
+        chipsContainer.setPadding(dp(10), dp(10), dp(10), dp(10));
+        chipsContainer.setBackground(rounded(palette.bg, 14));
+        content.addView(chipsContainer, matchWrap(0, 8, 0, 0));
 
         if ("edit".equals(sheetMode)) {
             TextView del = text("Delete task", 13, 700, PriorityPalette.IMMEDIATE);
             del.setGravity(Gravity.CENTER);
-            del.setPadding(dp(10), dp(12), dp(10), dp(4));
+            del.setMinHeight(dp(44));
+            del.setPadding(dp(10), 0, dp(10), 0);
             del.setOnClickListener(v -> confirmDelete(sheetEditId));
             content.addView(del, matchWrap(0, 6, 0, 0));
         }
@@ -2620,26 +2996,20 @@ public final class MainActivity extends Activity {
 
     private LinearLayout buildSheetActions() {
         LinearLayout actions = horizontal();
-        commitButton = text("", 15, 800, palette.accentInk);
-        commitButton.setGravity(Gravity.CENTER);
-        commitButton.setPadding(dp(15), dp(15), dp(15), dp(15));
-        GradientDrawable commitBg = new GradientDrawable();
-        commitBg.setColor(palette.accent);
-        commitBg.setCornerRadius(dp(16));
-        commitButton.setBackground(commitBg);
-        commitButton.setOnClickListener(v -> commitSheet());
-        actions.addView(commitButton, weight(1, 0, 0, 10, 0));
-
         TextView cancel = text("Cancel", 15, 700, palette.sub);
         cancel.setGravity(Gravity.CENTER);
-        cancel.setPadding(dp(18), dp(15), dp(18), dp(15));
-        GradientDrawable cancelBg = new GradientDrawable();
-        cancelBg.setColor(Color.TRANSPARENT);
-        cancelBg.setCornerRadius(dp(16));
-        cancelBg.setStroke(dp(2), palette.line);
-        cancel.setBackground(cancelBg);
+        cancel.setMinHeight(dp(50));
+        cancel.setPadding(dp(18), 0, dp(18), 0);
         cancel.setOnClickListener(v -> closeSheet());
-        actions.addView(cancel, wrap(0, 0, 0, 0));
+        actions.addView(cancel, wrap(0, 0, 8, 0));
+
+        commitButton = text("", 15, 800, palette.accentInk);
+        commitButton.setGravity(Gravity.CENTER);
+        commitButton.setMinHeight(dp(50));
+        commitButton.setPadding(dp(15), 0, dp(15), 0);
+        commitButton.setBackground(rounded(palette.accent, 14));
+        commitButton.setOnClickListener(v -> commitSheet());
+        actions.addView(commitButton, weight(1, 0, 0, 0, 0));
         return actions;
     }
 
@@ -2671,33 +3041,29 @@ public final class MainActivity extends Activity {
         if (listPill == null) {
             return;
         }
-        String[] choices = new String[categories.size() + 2];
-        choices[0] = "No list";
-        int checked = 0;
-        for (int i = 0; i < categories.size(); i++) {
-            choices[i + 1] = categories.get(i);
-            if (categories.get(i).equals(draftCategory)) {
-                checked = i + 1;
-            }
+        LinearLayout options = vertical();
+        Dialog dialog = sheetDialog("Move to list", options);
+        List<String> choices = new ArrayList<>();
+        choices.add(null);
+        choices.addAll(categories);
+        for (String category : choices) {
+            boolean selected = category == null ? draftCategory == null : category.equals(draftCategory);
+            String label = listPillLabel(category);
+            View lead = category == null
+                    ? glyphView(Glyph.CLOSE, 18, palette.sub)
+                    : dot(9, selected ? palette.info : palette.sub, !selected);
+            options.addView(optionRow(label, category == null ? 0 : catCount(category), selected, lead, () -> {
+                dialog.dismiss();
+                draftCategory = category;
+                styleListPill();
+                listPill.announceForAccessibility("Moved to " + label);
+            }), matchWrap(0, 0, 0, 2));
         }
-        int createIndex = choices.length - 1;
-        choices[createIndex] = "＋ New list";
-        new AlertDialog.Builder(themedContext())
-                .setTitle("Move to list")
-                .setSingleChoiceItems(choices, checked, (dialog, which) -> {
-                    if (which == createIndex) {
-                        dialog.dismiss();
-                        showCreateListForTask();
-                        return;
-                    }
-                    draftCategory = which == 0 ? null : categories.get(which - 1);
-                    styleListPill();
-                    String destination = listPillLabel(draftCategory);
-                    listPill.announceForAccessibility("Moved to " + destination);
-                    dialog.dismiss();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        options.addView(optionRow("New list", 0, false, glyphView(Glyph.PLUS, 20, palette.info), () -> {
+            dialog.dismiss();
+            showCreateListForTask();
+        }), matchWrap(0, 0, 0, 0));
+        showSheetDialog(dialog);
     }
 
     private void showCreateListForTask() {
@@ -2760,14 +3126,13 @@ public final class MainActivity extends Activity {
         }
         String label = listPillLabel(draftCategory);
         boolean assigned = draftCategory != null && !draftCategory.trim().isEmpty();
-        listPill.setText(label + "  ▾");
-        listPill.setTextColor(assigned ? palette.accent : palette.sub);
+        listPill.setText(label);
+        listPill.setTextColor(assigned ? palette.ink : palette.sub);
+        listPill.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null,
+                new Glyph(Glyph.EXPAND_MORE, dp(18), palette.sub, 2.2f), null);
         listPill.setContentDescription("List: " + label + ". Double tap to change.");
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(palette.bg);
-        bg.setCornerRadius(dp(999));
-        bg.setStroke(dp(2), assigned ? palette.accent : palette.line);
-        listPill.setBackground(bg);
+        GradientDrawable bg = rounded(assigned ? palette.chip : palette.soft, 999);
+        setBackgroundKeepPadding(listPill, new InsetDrawable(bg, 0, dp(6), 0, dp(6)));
     }
 
     private void updateSheetDynamic() {
@@ -2775,10 +3140,10 @@ public final class MainActivity extends Activity {
         parts.add(impactLabel(draftImpact) + " impact");
         parts.add(impactLabel(draftEffort) + " effort");
         if (draftQuick) {
-            parts.add("Quick win: fast");
+            parts.add("Quick win");
         }
         if (draftUrgent) {
-            parts.add("Urgent: top");
+            parts.add("Urgent");
         }
         detailsSummary.setText("Assumed: " + TextUtils.join("  ·  ", parts));
         detailsToggle.setText(detailsExpanded ? "Done" : "Adjust");
@@ -2787,10 +3152,14 @@ public final class MainActivity extends Activity {
 
         boolean hasReminder = draftReminderAt > 0;
         remindChip.setContentDescription(hasReminder ? "Reminder settings" : "Set reminder");
-        reminderSummary.setText(hasReminder ? reminderShortFromMillis(draftReminderAt) : "");
+        String repeatText = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit) && draftRepeatEveryValid
+                ? "  ·  every " + (draftRepeatEvery == 1 ? "" : draftRepeatEvery + " ")
+                + repeatOption(draftRepeatUnit).label.toLowerCase(java.util.Locale.ROOT)
+                : "";
+        reminderSummary.setText(hasReminder ? reminderShortFromMillis(draftReminderAt) + repeatText : "");
         styleReminderChip(hasReminder);
-        if (remindClear != null) {
-            remindClear.setVisibility(hasReminder ? View.VISIBLE : View.GONE);
+        if (reminderInfoRow != null) {
+            reminderInfoRow.setVisibility(hasReminder ? View.VISIBLE : View.GONE);
         }
 
         renderReminderSettings();
@@ -2825,24 +3194,11 @@ public final class MainActivity extends Activity {
         if (detailsToggle == null) {
             return;
         }
-        detailsToggle.setTextColor(detailsExpanded ? palette.accent : palette.accentInk);
-        detailsToggle.setPadding(dp(14), dp(7), dp(14), dp(7));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(999));
-        if (detailsExpanded) {
-            bg.setColor(Color.TRANSPARENT);
-            bg.setStroke(dp(2), palette.accent);
-            detailsToggle.setShadowLayer(0, 0, 0, Color.TRANSPARENT);
-            detailsToggle.setElevation(0f);
-            stopAdjustPulse();
-        } else {
-            bg.setColor(palette.accent);
-            bg.setStroke(dp(2), PriorityPalette.withAlpha(0xFFFFFFFF, 0x99));
-            detailsToggle.setShadowLayer(0, 0, 0, Color.TRANSPARENT);
-            detailsToggle.setElevation(0f);
-            stopAdjustPulse();
-        }
-        detailsToggle.setBackground(bg);
+        stopAdjustPulse();
+        detailsToggle.setTextColor(detailsExpanded ? palette.accentInk : palette.info);
+        setBackgroundKeepPadding(detailsToggle, detailsExpanded
+                ? new InsetDrawable(rounded(palette.accent, 999), 0, dp(4), 0, dp(4))
+                : null);
     }
 
     private void startAdjustPulse() {
@@ -2883,17 +3239,7 @@ public final class MainActivity extends Activity {
         if (remindChip == null) {
             return;
         }
-        remindChip.setActive(active);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(12));
-        if (active) {
-            bg.setColor(PriorityPalette.withAlpha(palette.accent, 0x1F));
-            bg.setStroke(dp(2), palette.accent);
-        } else {
-            bg.setColor(palette.bg);
-            bg.setStroke(dp(2), palette.line);
-        }
-        remindChip.setBackground(bg);
+        remindChip.setActive(active || reminderSettingsOpen);
     }
 
     private void toggleDetailsAnimated() {
@@ -2968,36 +3314,65 @@ public final class MainActivity extends Activity {
     }
 
     private void buildChips(LinearLayout container) {
-        container.addView(chipGroupLabel("IMPACT"));
-        container.addView(impactEffortRow("impact"), matchWrap(0, 8, 0, 15));
-        container.addView(chipGroupLabel("EFFORT"));
-        container.addView(impactEffortRow("effort"), matchWrap(0, 8, 0, 15));
+        container.addView(impactEffortRow("impact"), matchWrap(0, 0, 0, 8));
+        container.addView(impactEffortRow("effort"), matchWrap(0, 0, 0, 10));
         LinearLayout flags = horizontal();
-        TextView urgent = chipButton("Urgent: do now", draftUrgent, PriorityPalette.IMMEDIATE, 0xFFFFFFFF);
-        urgent.setOnClickListener(v -> {
-            draftUrgent = !draftUrgent;
-            updateSheetDynamic();
-        });
-        TextView quick = chipButton("Quick win: low effort", draftQuick, palette.accent, palette.accentInk);
+        TextView quick = flagButton("Quick win", Glyph.BOLT, draftQuick,
+                palette.accent, palette.accentInk);
         quick.setOnClickListener(v -> {
             draftQuick = !draftQuick;
             updateSheetDynamic();
         });
-        flags.addView(urgent, wrap(0, 0, 8, 0));
-        flags.addView(quick, wrap(0, 0, 0, 0));
+        TextView urgent = flagButton("Urgent", Glyph.ALERT, draftUrgent,
+                PriorityPalette.withAlpha(PriorityPalette.IMMEDIATE, 0x26), PriorityPalette.IMMEDIATE);
+        urgent.setOnClickListener(v -> {
+            draftUrgent = !draftUrgent;
+            updateSheetDynamic();
+        });
+        flags.addView(quick, weight(1, 0, 0, 6, 0));
+        flags.addView(urgent, weight(1, 0, 0, 0, 0));
         container.addView(flags, matchWrap(0, 0, 0, 0));
+    }
+
+    private TextView flagButton(String label, String glyph, boolean active, int activeBg, int activeInk) {
+        int ink = active ? activeInk : palette.sub;
+        TextView flag = text(label, 13, active ? 800 : 600, ink);
+        flag.setGravity(Gravity.CENTER);
+        flag.setMinHeight(dp(40));
+        flag.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                new Glyph(glyph, dp(15), ink, 2.2f), null, null, null);
+        flag.setCompoundDrawablePadding(dp(6));
+        flag.setPadding(dp(12), 0, dp(12), 0);
+        flag.setBackground(rounded(active ? activeBg : palette.surface, 10));
+        flag.setContentDescription(label + (active ? ", on" : ", off"));
+        return flag;
     }
 
     private LinearLayout impactEffortRow(String field) {
         LinearLayout row = horizontal();
+        TextView label = text("impact".equals(field) ? "IMPACT" : "EFFORT", 11, 800, palette.heroSub);
+        label.setLetterSpacing(0.08f);
+        label.setMinWidth(dp(62));
+        row.addView(label, wrap(2, 0, 4, 0));
         String[][] opts = {{"High", TodoTask.HIGH}, {"Medium", TodoTask.MEDIUM}, {"Low", TodoTask.LOW}};
         for (int i = 0; i < opts.length; i++) {
-            String label = opts[i][0];
+            String optionLabel = opts[i][0];
             String val = opts[i][1];
             boolean active = "impact".equals(field) ? draftImpact.equals(val) : draftEffort.equals(val);
-            int color = valueColor(val);
-            int ink = valueInk(val);
-            TextView chip = chipButton(label, active, color, ink);
+            TextView chip = text(optionLabel, 13, active ? 700 : 500,
+                    active ? palette.accentInk : palette.sub);
+            chip.setGravity(Gravity.CENTER);
+            chip.setMinHeight(dp(40));
+            chip.setSingleLine(true);
+            chip.setBackground(rounded(active ? palette.accent : palette.surface, 10));
+            if (active) {
+                chip.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        new Glyph(Glyph.CHECK, dp(14), palette.accentInk, 2.6f), null, null, null);
+                chip.setCompoundDrawablePadding(dp(4));
+                chip.setPadding(dp(8), 0, dp(10), 0);
+            }
+            chip.setContentDescription(("impact".equals(field) ? "Impact " : "Effort ")
+                    + optionLabel + (active ? ", selected" : ""));
             chip.setOnClickListener(v -> {
                 if ("impact".equals(field)) {
                     draftImpact = val;
@@ -3006,7 +3381,7 @@ public final class MainActivity extends Activity {
                 }
                 updateSheetDynamic();
             });
-            row.addView(chip, wrap(0, 0, i < opts.length - 1 ? 8 : 0, 0));
+            row.addView(chip, weight(1, 0, 0, i < opts.length - 1 ? 6 : 0, 0));
         }
         return row;
     }
@@ -3015,10 +3390,13 @@ public final class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         boolean repeats = !TodoTask.REPEAT_NONE.equals(draftRepeatUnit);
 
-        TextView label = text("Repeats\nevery", 10, 700, palette.sub);
-        label.setGravity(Gravity.CENTER);
+        TextView label = text("Repeats every", 13, 600, palette.ink);
+        label.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                new Glyph(Glyph.REPEAT, dp(16), palette.sub, 2.2f), null, null, null);
+        label.setCompoundDrawablePadding(dp(8));
+        label.setGravity(Gravity.CENTER_VERTICAL);
         label.setContentDescription("Repeats every");
-        row.addView(label, wrap(0, 0, 6, 0));
+        row.addView(label, weight(1, 0, 0, 8, 0));
 
         View intervalControl;
         if (repeats) {
@@ -3071,13 +3449,16 @@ public final class MainActivity extends Activity {
         row.addView(intervalControl, everyParams);
 
         RepeatOption selected = repeatOption(draftRepeatUnit);
-        TextView unit = text(selected.label + "  ▾", 12, 700, palette.ink);
+        TextView unit = text(selected.label, 13, 700, palette.ink);
+        unit.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null,
+                new Glyph(Glyph.EXPAND_MORE, dp(16), palette.sub, 2.2f), null);
+        unit.setCompoundDrawablePadding(dp(2));
         unit.setGravity(Gravity.CENTER);
         unit.setSingleLine(true);
         unit.setEllipsize(TextUtils.TruncateAt.END);
         unit.setMinWidth(dp(64));
         unit.setMinHeight(dp(44));
-        unit.setPadding(dp(8), 0, dp(8), 0);
+        unit.setPadding(dp(12), 0, dp(8), 0);
         unit.setBackground(repeatControlBackground());
         unit.setContentDescription("Repeat unit: " + selected.label
                 + ". Double tap to change.");
@@ -3102,11 +3483,7 @@ public final class MainActivity extends Activity {
     }
 
     private GradientDrawable repeatControlBackground() {
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(palette.bg);
-        bg.setCornerRadius(dp(12));
-        bg.setStroke(dp(2), palette.line);
-        return bg;
+        return rounded(palette.soft, 12);
     }
 
     private void openReminderPicker() {
@@ -3250,7 +3627,6 @@ public final class MainActivity extends Activity {
             fabTarget.setVisibility(View.INVISIBLE);
         }
         if (catStrip != null) catStrip.setVisibility(View.INVISIBLE);
-        if (bottomNavigation != null) bottomNavigation.setVisibility(View.INVISIBLE);
         if (reachArc != null) {
             reachArc.animate().cancel();
             reachArc.setAlpha(0f);
@@ -3258,7 +3634,6 @@ public final class MainActivity extends Activity {
     }
 
     private void restoreActZone() {
-        if (bottomNavigation != null) bottomNavigation.setVisibility(View.VISIBLE);
         setListDockVisible(true);
         if (fab != null) {
             fab.animate().cancel();
@@ -3557,11 +3932,6 @@ public final class MainActivity extends Activity {
 
     // ===================== model helpers =====================
 
-    private List<TodoTask> activeTasks(long now) {
-        return TaskViews.select(tasks, "All".equals(activeCat) ? null : activeCat,
-                recurringOnly, currentScreen, searchQuery, now);
-    }
-
     private void sortTasks() {
         Collections.sort(tasks, new Comparator<TodoTask>() {
             @Override
@@ -3625,6 +3995,7 @@ public final class MainActivity extends Activity {
         }
     }
 
+    /** Inline clock inside the title field: grey when unset, blue once a reminder exists. */
     private final class ReminderClockButton extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private boolean active;
@@ -3642,7 +4013,7 @@ public final class MainActivity extends Activity {
 
         @Override
         protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            setMeasuredDimension(dp(52), dp(48));
+            setMeasuredDimension(dp(40), dp(44));
         }
 
         @Override
@@ -3650,15 +4021,17 @@ public final class MainActivity extends Activity {
             super.onDraw(canvas);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float radius = dp(12);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(active ? palette.info : palette.chip);
+            canvas.drawCircle(cx, cy, dp(15), paint);
+            float density = getResources().getDisplayMetrics().density;
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(active ? palette.accent : palette.sub);
-            canvas.drawCircle(cx, cy, radius, paint);
-            canvas.drawLine(cx, cy, cx, cy - dp(7), paint);
-            canvas.drawLine(cx, cy, cx + dp(7), cy + dp(4), paint);
+            paint.setStrokeWidth(1.8f * density);
+            paint.setColor(active ? palette.infoInk : palette.sub);
+            canvas.drawCircle(cx, cy, 7.5f * density, paint);
+            canvas.drawLine(cx, cy, cx, cy - 4.2f * density, paint);
+            canvas.drawLine(cx, cy, cx + 3f * density, cy + 2f * density, paint);
         }
     }
 
@@ -3712,60 +4085,64 @@ public final class MainActivity extends Activity {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            // Borderless "quiet line icons" treatment (Today.dc.html, option 1a):
-            // no ring/background behind each icon — the glyphs sit bare in the header.
-            if ("search".equals(kind) || "account".equals(kind)) {
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(dp(2));
-                paint.setStrokeCap(Paint.Cap.ROUND);
-                paint.setColor(palette.sub);
-                float cx = getWidth() / 2f, cy = getHeight() / 2f;
-                if ("search".equals(kind)) {
-                    canvas.drawCircle(cx - dp(2), cy - dp(2), dp(7), paint);
-                    canvas.drawLine(cx + dp(3), cy + dp(3), cx + dp(10), cy + dp(10), paint);
-                } else {
-                    canvas.drawCircle(cx, cy - dp(5), dp(4), paint);
-                    oval.set(cx - dp(9), cy + dp(2), cx + dp(9), cy + dp(10));
-                    canvas.drawRoundRect(oval, dp(4), dp(4), paint);
-                }
-            } else if ("hand".equals(kind)) {
-                drawHand(canvas);
-            } else if ("more".equals(kind)) {
-                drawMore(canvas);
-            } else {
-                drawTheme(canvas);
-            }
-        }
-
-        private void drawMore(Canvas canvas) {
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float unit = getWidth() / 36f;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(palette.accent);
-            float r = unit * 1.7f;
-            float gap = unit * 5.4f;
-            canvas.drawCircle(cx, cy - gap, r, paint);
-            canvas.drawCircle(cx, cy, r, paint);
-            canvas.drawCircle(cx, cy + gap, r, paint);
-        }
-
-        private void drawHand(Canvas canvas) {
-            float center = getWidth() / 2f;
-            float scale = getWidth() / 36f;
-            canvas.save();
-            if (HAND_LEFT.equals(handState)) {
-                canvas.scale(-1f, 1f, center, center);
-            } else if (HAND_CENTER.equals(handState)) {
-                canvas.translate(-2f * scale, 0f);
+            if ("account".equals(kind)) {
+                drawAccount(canvas, cx, cy);
+                return;
             }
-            canvas.translate(6f * scale, 6f * scale);
-            canvas.scale(scale, scale);
+            // Quiet 20dp line icons on a 24-unit grid, centered in a 44dp target.
+            float u = dp(20) / 24f;
+            canvas.save();
+            canvas.translate(cx - 12f * u, cy - 12f * u);
+            canvas.scale(u, u);
+            paint.setColor(palette.sub);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
-            paint.setStrokeWidth(1.55f);
+            paint.setStrokeWidth(2f);
+            if ("search".equals(kind)) {
+                canvas.drawCircle(10.5f, 10.5f, 6.5f, paint);
+                canvas.drawLine(15.5f, 15.5f, 20.5f, 20.5f, paint);
+            } else if ("hand".equals(kind)) {
+                drawHand(canvas);
+            } else if ("more".equals(kind)) {
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(12f, 5f, 2f, paint);
+                canvas.drawCircle(12f, 12f, 2f, paint);
+                canvas.drawCircle(12f, 19f, 2f, paint);
+            } else if (THEME_NIGHT.equals(themeState)) {
+                drawMoon(canvas);
+            } else if (THEME_SYSTEM.equals(themeState)) {
+                drawAuto(canvas);
+            } else {
+                drawSun(canvas);
+            }
+            canvas.restore();
+        }
+
+        private void drawAccount(Canvas canvas, float cx, float cy) {
+            paint.setStyle(Paint.Style.FILL);
             paint.setColor(palette.accent);
+            canvas.drawCircle(cx, cy, dp(16), paint);
+            float u = dp(18) / 24f;
+            canvas.save();
+            canvas.translate(cx - 12f * u, cy - 12f * u);
+            canvas.scale(u, u);
+            paint.setColor(palette.accentInk);
+            canvas.drawCircle(12f, 8.5f, 3.8f, paint);
+            oval.set(4.5f, 14f, 19.5f, 27f);
+            canvas.drawArc(oval, 180f, 180f, true, paint);
+            canvas.restore();
+        }
+
+        private void drawHand(Canvas canvas) {
+            canvas.save();
+            if (HAND_LEFT.equals(handState)) {
+                canvas.scale(-1f, 1f, 12f, 12f);
+            }
+            canvas.translate(0.5f, -1.5f);
+            paint.setStrokeWidth(1.8f);
             canvas.drawLine(6f, 15f, 6f, 8f, paint);
             canvas.drawLine(10f, 14f, 10f, 5f, paint);
             canvas.drawLine(14f, 14f, 14f, 4.5f, paint);
@@ -3782,65 +4159,81 @@ public final class MainActivity extends Activity {
             path.cubicTo(18.4f, 7.8f, 18f, 8.2f, 18f, 8.9f);
             canvas.drawPath(path, paint);
             canvas.restore();
-        }
-
-        private void drawTheme(Canvas canvas) {
-            if (THEME_NIGHT.equals(themeState)) {
-                drawMoon(canvas);
-            } else if (THEME_SYSTEM.equals(themeState)) {
-                drawAuto(canvas);
-            } else {
-                drawSun(canvas, getWidth() / 2f, getHeight() / 2f, 1f);
+            if (HAND_CENTER.equals(handState)) {
+                // Small mark under the palm: the + button is centered.
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(12f, 24.5f, 1.3f, paint);
             }
         }
 
-        private void drawSun(Canvas canvas, float cx, float cy, float scale) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeWidth(getWidth() / 36f * 1.55f);
-            paint.setColor(palette.accent);
-            float unit = getWidth() / 36f;
-            float radius = unit * 4.2f * scale;
-            canvas.drawCircle(cx, cy, radius, paint);
-            float inner = unit * 9.2f * scale;
-            float outer = unit * 12.5f * scale;
+        private void drawSun(Canvas canvas) {
+            canvas.drawCircle(12f, 12f, 4.2f, paint);
             for (int i = 0; i < 8; i++) {
                 double angle = i * Math.PI / 4d;
-                float x1 = cx + (float) Math.cos(angle) * inner;
-                float y1 = cy + (float) Math.sin(angle) * inner;
-                float x2 = cx + (float) Math.cos(angle) * outer;
-                float y2 = cy + (float) Math.sin(angle) * outer;
-                canvas.drawLine(x1, y1, x2, y2, paint);
+                canvas.drawLine(12f + (float) Math.cos(angle) * 7.6f, 12f + (float) Math.sin(angle) * 7.6f,
+                        12f + (float) Math.cos(angle) * 10f, 12f + (float) Math.sin(angle) * 10f, paint);
             }
         }
 
         private void drawMoon(Canvas canvas) {
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-            float unit = getWidth() / 36f;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(palette.accent);
-            canvas.drawCircle(cx - unit * 1.8f, cy, unit * 7.8f, paint);
-            paint.setColor(palette.surface);
-            canvas.drawCircle(cx + unit * 2.2f, cy - unit * 2.3f, unit * 7.8f, paint);
+            path.reset();
+            path.addCircle(11.5f, 12.5f, 8.5f, Path.Direction.CW);
+            Path bite = new Path();
+            bite.addCircle(16.5f, 7.5f, 7f, Path.Direction.CW);
+            path.op(bite, Path.Op.DIFFERENCE);
+            canvas.drawPath(path, paint);
         }
 
         private void drawAuto(Canvas canvas) {
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-            float unit = getWidth() / 36f;
-            drawSun(canvas, cx, cy, 0.62f);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeWidth(unit * 1.45f);
-            paint.setColor(palette.accent);
-            oval.set(cx - unit * 12.5f, cy - unit * 12.5f, cx + unit * 12.5f, cy + unit * 12.5f);
-            canvas.drawArc(oval, 210, 245, false, paint);
-            path.reset();
-            path.moveTo(cx - unit * 10.4f, cy + unit * 9.4f);
-            path.lineTo(cx - unit * 13.9f, cy + unit * 10.3f);
-            path.lineTo(cx - unit * 12.1f, cy + unit * 6.9f);
-            canvas.drawPath(path, paint);
+            canvas.drawCircle(12f, 12f, 8.5f, paint);
+            paint.setStyle(Paint.Style.FILL);
+            oval.set(3.5f, 3.5f, 20.5f, 20.5f);
+            canvas.drawArc(oval, 90f, 180f, true, paint);
+        }
+    }
+
+    /**
+     * Small uppercase list tag drawn on canvas. It is not a TextView on purpose:
+     * its label stays out of view text so it never shadows the real list controls.
+     */
+    private final class TagView extends View {
+        private final String label;
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF box = new RectF();
+        private final int padX = dp(6);
+        private final int padY = dp(3);
+
+        TagView(String name, int color) {
+            super(MainActivity.this);
+            label = name.toUpperCase(java.util.Locale.ROOT);
+            textPaint.setColor(color);
+            textPaint.setTextSize(android.util.TypedValue.applyDimension(
+                    android.util.TypedValue.COMPLEX_UNIT_SP, 10, getResources().getDisplayMetrics()));
+            textPaint.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
+            textPaint.setLetterSpacing(0.04f);
+            fillPaint.setColor(PriorityPalette.withAlpha(color, 0x1F));
+            setContentDescription("In list " + name);
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            Paint.FontMetrics metrics = textPaint.getFontMetrics();
+            int width = Math.min(Math.round(textPaint.measureText(label)) + padX * 2, dp(96));
+            int height = Math.round(metrics.descent - metrics.ascent) + padY * 2;
+            setMeasuredDimension(width, height);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            box.set(0, 0, getWidth(), getHeight());
+            canvas.drawRoundRect(box, dp(5), dp(5), fillPaint);
+            CharSequence shown = TextUtils.ellipsize(label, new android.text.TextPaint(textPaint),
+                    getWidth() - padX * 2f, TextUtils.TruncateAt.END);
+            Paint.FontMetrics metrics = textPaint.getFontMetrics();
+            float baseline = getHeight() / 2f - (metrics.ascent + metrics.descent) / 2f;
+            canvas.drawText(shown, 0, shown.length(), padX, baseline, textPaint);
         }
     }
 

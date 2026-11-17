@@ -639,7 +639,7 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-initial-list-picker.xml").getroot()
-new_list = next(node for node in root.iter("node") if node.attrib.get("text") == "＋ New list")
+new_list = next(node for node in root.iter("node") if node.attrib.get("text") == "New list")
 x, y = center(new_list.attrib["bounds"])
 with open(f"{SCREENSHOT_DIR}/new-list-choice-center.txt", "w") as f:
     f.write(f"{x} {y}\n")
@@ -1085,7 +1085,7 @@ if not candidates:
 _, checkbox = min(candidates, key=lambda candidate: candidate[0])
 x, y = center(checkbox.attrib["bounds"])
 overlays = [n for n in root.iter("node") if n.attrib.get("content-desc") in
-            {"Previous list", "Next list", "Add task", "Focus", "Tasks", "Later", "Stats"}]
+            {"Previous list", "Next list", "Add task"}]
 overlay_top = min(int(re.findall(r"\d+", n.attrib["bounds"])[1]) for n in overlays)
 appbar = [n for n in root.iter("node") if n.attrib.get("text", "").endswith("All Tasks")
           or n.attrib.get("content-desc") == "Search tasks"]
@@ -1303,32 +1303,65 @@ root = ET.parse("app/build/verification-screenshots/window-search-restored.xml")
 assert any(n.attrib.get("text") == "Web_synced_task" for n in root.iter("node")), "Clear search did not restore tasks"
 PY
 
-# Every bottom destination changes the visible surface and returns to Tasks.
-tap_ui_label /sdcard/window-nav-focus-anchor.xml "$SCREENSHOT_DIR/window-nav-focus-anchor.xml" "Focus"
+# Progress moved from a bottom tab into the overflow menu; the bottom tabs are gone.
+tap_ui_label /sdcard/window-progress-more.xml "$SCREENSHOT_DIR/window-progress-more.xml" "More options"
 sleep 1
-assert_ui_labels window-nav-focus "Today" "Web_synced_task"
-adb exec-out screencap -p > "$SCREENSHOT_DIR/05b-day-focus.png"
+tap_ui_label /sdcard/window-progress-menu.xml "$SCREENSHOT_DIR/window-progress-menu.xml" "Progress"
+sleep 1
+assert_ui_labels window-progress "Your progress" "Every task counts"
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05b-day-progress.png"
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+assert_ui_labels window-after-progress "Today" "PRIORITY INDEX" "Web_synced_task"
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
-root = ET.parse("app/build/verification-screenshots/window-nav-focus.xml").getroot()
-assert not any(n.attrib.get("text") == "PRIORITY INDEX" for n in root.iter("node")), "Focus must hide the task index"
+root = ET.parse("app/build/verification-screenshots/window-after-progress.xml").getroot()
+stale = [n.attrib.get("content-desc") for n in root.iter("node")
+         if n.attrib.get("content-desc") in {"Focus", "Tasks", "Later", "Stats"}]
+assert not stale, f"Removed bottom navigation is still present: {stale!r}"
 PY
-tap_ui_label /sdcard/window-nav-later-anchor.xml "$SCREENSHOT_DIR/window-nav-later-anchor.xml" "Later"
-sleep 1
-assert_ui_labels window-nav-later "For later"
-adb exec-out screencap -p > "$SCREENSHOT_DIR/05c-day-later.png"
+
+# Swiping a task away from the thumb parks it in the collapsible Later section,
+# and Restore returns it to the active index.
+snapshot_ui window-before-later-swipe
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+SCREENSHOT_DIR = "app/build/verification-screenshots"
+root = ET.parse(f"{SCREENSHOT_DIR}/window-before-later-swipe.xml").getroot()
+node = next(n for n in root.iter("node") if n.attrib.get("text") == "Legacy_low_priority_task")
+_, y1, _, y2 = map(int, re.findall(r"\d+", node.attrib["bounds"]))
+dock_top = min(int(re.findall(r"\d+", n.attrib["bounds"])[1]) for n in root.iter("node")
+               if n.attrib.get("content-desc") in {"Previous list", "Next list", "Add task"})
+y = (y1 + y2) // 2
+assert y < dock_top - 24, f"Legacy row is hidden behind the dock: row={y}, dock={dock_top}"
+with open(f"{SCREENSHOT_DIR}/later-swipe-y.txt", "w") as f:
+    f.write(f"{y}\n")
+PY
+read later_y < "$SCREENSHOT_DIR/later-swipe-y.txt"
+adb shell input swipe 620 "$later_y" 120 "$later_y" 250
+sleep 2
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05c-day-later-collapsed.png"
+assert_ui_labels window-later-collapsed "LATER" "Show 1 task in Later section"
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
-root = ET.parse("app/build/verification-screenshots/window-nav-later.xml").getroot()
-assert not any(n.attrib.get("text") == "Web_synced_task" for n in root.iter("node")), "Later must exclude active tasks"
+root = ET.parse("app/build/verification-screenshots/window-later-collapsed.xml").getroot()
+assert not any(n.attrib.get("text") == "Legacy_low_priority_task" for n in root.iter("node")), (
+    "A Later task must stay out of the active index while its section is collapsed")
 PY
-tap_ui_label /sdcard/window-nav-stats-anchor.xml "$SCREENSHOT_DIR/window-nav-stats-anchor.xml" "Stats"
+tap_ui_label /sdcard/window-later-open.xml "$SCREENSHOT_DIR/window-later-open.xml" "Show 1 task in Later section"
 sleep 1
-assert_ui_labels window-nav-stats "Every task counts"
-adb exec-out screencap -p > "$SCREENSHOT_DIR/05d-day-stats.png"
-tap_ui_label /sdcard/window-nav-tasks-anchor.xml "$SCREENSHOT_DIR/window-nav-tasks-anchor.xml" "Tasks"
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05d-day-later-expanded.png"
+assert_ui_labels window-later-expanded "Legacy_low_priority_task" "Restore task: Legacy_low_priority_task"
+tap_ui_label /sdcard/window-later-restore.xml "$SCREENSHOT_DIR/window-later-restore.xml" "Restore task: Legacy_low_priority_task"
 sleep 1
-assert_ui_labels window-nav-tasks "Today" "PRIORITY INDEX" "Web_synced_task"
+assert_ui_labels window-later-restored "Legacy_low_priority_task"
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-later-restored.xml").getroot()
+assert not any(n.attrib.get("text") == "LATER" for n in root.iter("node")), (
+    "The Later section must disappear once it is empty")
+PY
 
 # Existing list selection and both dock arrows must apply real filters.
 tap_ui_label /sdcard/window-list-select-anchor.xml "$SCREENSHOT_DIR/window-list-select-anchor.xml" "Choose list"
@@ -1343,26 +1376,39 @@ sleep 1
 assert_ui_labels window-list-all "Web_synced_task"
 tap_ui_label /sdcard/window-list-next-anchor.xml "$SCREENSHOT_DIR/window-list-next-anchor.xml" "Next list"
 sleep 1
-assert_ui_labels window-list-recurring "Nothing in the index yet."
+assert_ui_labels window-list-next "Legacy_low_priority_task"
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
-root = ET.parse("app/build/verification-screenshots/window-list-recurring.xml").getroot()
-assert not any(n.attrib.get("text") in {"Web_synced_task", "Legacy_low_priority_task"} for n in root.iter("node")), "Recurring must exclude one-off tasks"
+root = ET.parse("app/build/verification-screenshots/window-list-next.xml").getroot()
+selected = [n.attrib.get("content-desc") for n in root.iter("node")
+            if n.attrib.get("content-desc", "").startswith("List: ") and n.attrib.get("selected") == "true"]
+assert selected == ["List: Legacy_list"], f"Next list must move from All to the first user list: {selected!r}"
+assert not any(n.attrib.get("content-desc") == "List: Recurring" for n in root.iter("node")), (
+    "The built-in Recurring filter duplicated user lists and must stay removed")
 PY
 tap_ui_label /sdcard/window-list-previous-anchor.xml "$SCREENSHOT_DIR/window-list-previous-anchor.xml" "Previous list"
 sleep 1
 assert_ui_labels window-list-previous-all "Web_synced_task"
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-list-previous-all.xml").getroot()
+selected = [n.attrib.get("content-desc") for n in root.iter("node")
+            if n.attrib.get("content-desc", "").startswith("List: ") and n.attrib.get("selected") == "true"]
+assert selected == ["List: All"], f"Previous list must return to All: {selected!r}"
+PY
 
 # Verify every native surface in explicit night mode, including dialogs that
 # otherwise inherit Android's light application theme.
 tap_ui_label /sdcard/window-theme-day.xml "$SCREENSHOT_DIR/window-theme-day.xml" "Day theme"
 sleep 1
 capture_palette 06-night-home night
-for screen in Focus Later Stats Tasks; do
-  tap_ui_label "/sdcard/window-night-nav-$screen.xml" "$SCREENSHOT_DIR/window-night-nav-$screen.xml" "$screen"
-  sleep 1
-  capture_palette "06-night-$screen" night
-done
+tap_ui_label /sdcard/window-night-progress-more.xml "$SCREENSHOT_DIR/window-night-progress-more.xml" "More options"
+sleep 1
+tap_ui_label /sdcard/window-night-progress-menu.xml "$SCREENSHOT_DIR/window-night-progress-menu.xml" "Progress"
+sleep 1
+capture_palette 06-night-progress night
+adb shell input keyevent KEYCODE_BACK
+sleep 1
 
 tap_ui_label /sdcard/window-night-lists-anchor.xml "$SCREENSHOT_DIR/window-night-lists-anchor.xml" "Choose list"
 sleep 1

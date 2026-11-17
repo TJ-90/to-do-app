@@ -38,7 +38,12 @@ Buckets:
 
 - Add, edit, complete, restore, and delete tasks.
 - Automatic score calculation and descending score sort.
-- Primary MIT display based on the highest scoring incomplete task.
+- Primary MIT display based on the highest scoring incomplete task across every
+  list, with a one-tap completion ring.
+- User lists with a thumb-reachable list dock next to the add button.
+- Swipe a task away to park it in a collapsible Later section; restore it with
+  one tap.
+- Progress summary in the overflow menu.
 - Impact, effort, urgency, quick-task, and recurring-MIT fields.
 - Date and time reminder picker.
 - Android notifications through `AlarmManager` and `NotificationManager`.
@@ -77,8 +82,9 @@ preferences and excluded from Android backup and device transfer.
 ## Build
 
 The repository includes a GitHub Actions workflow that tests the web companion
-and builds the debug APK on every push to `main` or `codex/**`, pull request, or
-manual workflow dispatch.
+and builds the debug APK on every push to `main`, `codex/**`, or `claude/**`, pull
+request, or manual workflow dispatch. Download it from the run's
+`priority-todo-debug-apk` artifact.
 
 Locally, with JDK 17 and Gradle installed:
 

@@ -106,8 +106,8 @@ nav_top = min(frame[1] for frame in frames["navigationBars"])
 assert nav_top > status_bottom, f"Invalid safe area: status={frames['statusBars']!r}, navigation={frames['navigationBars']!r}"
 root = ET.parse(ui_path).getroot()
 controls = [n for n in root.iter("node") if n.attrib.get("text", "").endswith("All Tasks")
-            or n.attrib.get("content-desc") in {"Search tasks", "Add task", "Focus", "Tasks", "Later", "Stats"}]
-assert len(controls) >= 7, "Expected app bar, search, add action and four navigation destinations"
+            or n.attrib.get("content-desc") in {"Search tasks", "Add task", "Previous list", "Next list"}]
+assert len(controls) >= 5, "Expected app bar, search, add action and both list-dock arrows"
 for node in controls:
     x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.attrib["bounds"]))
     label = node.attrib.get("content-desc") or node.attrib.get("text")

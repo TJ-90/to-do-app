@@ -97,6 +97,21 @@ Do not change these constants, score math, or bucket thresholds unless the user 
 - Three-way theme: Day / Night / Auto (system).
 - Handedness toggle mirrors the FAB position and swipe-to-complete direction.
 - Primary interactions: tap the row circle to complete, swipe toward the thumb to complete, swipe away to send to Later, long-press a row to edit.
+- Single screen, no bottom tab bar. Top zone: app bar, `Today` header, and the
+  `YOUR #1 RIGHT NOW` hero. The hero is always the global MIT across every list
+  (with its own completion ring) and is not repeated in the list below it.
+- Bottom zone: `PRIORITY INDEX` for the selected list, then a collapsible
+  `LATER` section that appears only when Later tasks exist (each row has a
+  Restore action). Do not reintroduce separate Focus/Later/Stats tabs.
+- Lists are `All` plus user-created lists. There is no built-in `Recurring`
+  smart filter; it duplicated a user list of the same name.
+- The floating list dock (prev/next arrows, horizontally scrolling tabs with
+  counts) shares one bottom row with the circular `+` button and mirrors with
+  handedness. Progress lives in the overflow menu (`Progress`).
+- Rank spectrum colors come from a task's position in the global active order,
+  so a task keeps its color when switching lists.
+- Icons are drawn with `Glyph` (24-unit line icons); do not use text glyphs
+  such as `‹`, `›`, `▾`, `×`, or emoji for controls.
 - Add/edit happens in a bottom sheet. Keep the sheet usable with the keyboard open; GitHub Actions smoke tests this path.
 - Task details use a progressive `Add details` affordance so an empty multiline field never crowds the sheet. Details are reference material and never affect scoring; expanded rows/heroes may show capped previews.
 - The sheet header always exposes one compact list picker at the top right. It supports `No list`, existing lists, and inline list creation; do not restore the old full-width LIST chip row.
@@ -197,7 +212,7 @@ xmllint --noout app/src/main/AndroidManifest.xml app/src/main/res/values/*.xml a
 git diff --check -- .
 ```
 
-If local Android tooling is unavailable, push to a `main` or `codex/**` branch and verify the `Android APK` workflow passes. That workflow runs:
+If local Android tooling is unavailable, push to a `main`, `codex/**`, or `claude/**` branch and verify the `Android APK` workflow passes. That workflow runs:
 
 - `testDebugUnitTest`
 - `assembleDebug`
