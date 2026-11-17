@@ -98,6 +98,39 @@ PY
   adb shell input tap "$target_x" "$target_y"
 }
 
+snapshot_ui() {
+  adb shell uiautomator dump "/sdcard/$1.xml" >/dev/null
+  adb pull "/sdcard/$1.xml" "$SCREENSHOT_DIR/$1.xml" >/dev/null
+}
+
+assert_ui_labels() {
+  snapshot_ui "$1"
+  python3 - "$SCREENSHOT_DIR/$1.xml" "$@" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+path, _, *expected = sys.argv[1:]
+root = ET.parse(path).getroot()
+labels = {value for node in root.iter("node")
+          for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", "")) if value}
+for label in expected:
+    assert label in labels, f"Expected {label!r}; visible labels: {sorted(labels)!r}"
+PY
+}
+
+assert_unchanged_ui_texts() {
+  python3 - "$SCREENSHOT_DIR/$1.xml" "$SCREENSHOT_DIR/$2.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+def labels(path):
+    return {value for node in ET.parse(path).getroot().iter("node")
+            for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", "")) if value}
+before, after = map(labels, sys.argv[1:])
+assert before == after, f"Cancelling the picker changed the draft: removed={before-after!r}, added={after-before!r}"
+PY
+}
+
 # No image library is needed: decode Android's RGB/RGBA screencaps and verify
 # that night mode does not leave a white sheet/dialog on a darkened background.
 assert_screen_palette() {
@@ -275,10 +308,17 @@ root = ET.parse(f"{SCREENSHOT_DIR}/window-launch.xml").getroot()
 labels = {value for node in root.iter("node")
           for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
           if value}
-for expected in ("Legacy_low_priority_task", "Legacy_list"):
+for expected in ("Legacy_low_priority_task",):
     if expected not in labels:
         raise AssertionError(f"Legacy migration did not render {expected!r}; found {sorted(labels)!r}")
 PY
+
+# Lists can be outside the small horizontal dock; verify migration through its picker.
+tap_ui_label /sdcard/window-migration-lists-anchor.xml "$SCREENSHOT_DIR/window-migration-lists-anchor.xml" "Choose list"
+sleep 1
+assert_ui_labels window-migration-lists "Legacy_list"
+adb shell input keyevent KEYCODE_BACK
+sleep 1
 
 migration_written=0
 for attempt in $(seq 1 10); do
@@ -310,7 +350,7 @@ root = ET.parse(f"{SCREENSHOT_DIR}/window-migration-restart.xml").getroot()
 labels = {value for node in root.iter("node")
           for value in (node.attrib.get("text", ""), node.attrib.get("content-desc", ""))
           if value}
-for expected in ("Legacy_low_priority_task", "Legacy_list"):
+for expected in ("Legacy_low_priority_task",):
     if expected not in labels:
         raise AssertionError(f"Migrated value disappeared after restart: {expected!r}")
 
@@ -318,6 +358,12 @@ prefs = ET.parse(f"{SCREENSHOT_DIR}/migrated-shared-prefs.xml").getroot()
 if not any(node.attrib.get("name") == "category_states_v1" for node in prefs):
     raise AssertionError("Legacy list migration did not persist category_states_v1")
 PY
+
+tap_ui_label /sdcard/window-restart-lists-anchor.xml "$SCREENSHOT_DIR/window-restart-lists-anchor.xml" "Choose list"
+sleep 1
+assert_ui_labels window-restart-lists "Legacy_list"
+adb shell input keyevent KEYCODE_BACK
+sleep 1
 
 # Verify the overflow exposes sync setup and manual sync, then configure the emulator endpoint.
 python3 - <<'PY'
@@ -467,6 +513,18 @@ for label in ("Repeats every", "Repeat interval:", "Repeat unit:", "Clear remind
         raise AssertionError(f"Reminder control {label!r} is outside the viewport: {bounds!r}")
 PY
 
+# Custom scheduling supports date and time confirmation in the day theme.
+tap_ui_label /sdcard/window-day-custom-anchor.xml "$SCREENSHOT_DIR/window-day-custom-anchor.xml" "Custom date & time"
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02e-day-date-picker.png"
+assert_ui_labels window-day-date-picker "OK" "CANCEL"
+tap_ui_label /sdcard/window-day-date-confirm.xml "$SCREENSHOT_DIR/window-day-date-confirm.xml" "OK"
+sleep 1
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02f-day-time-picker.png"
+assert_ui_labels window-day-time-picker "OK" "CANCEL"
+tap_ui_label /sdcard/window-day-time-confirm.xml "$SCREENSHOT_DIR/window-day-time-confirm.xml" "OK"
+sleep 1
+
 tap_ui_label /sdcard/window-repeat-menu-anchor.xml "$SCREENSHOT_DIR/window-repeat-menu-anchor.xml" "Repeat unit:" prefix
 sleep 1
 tap_ui_label /sdcard/window-repeat-menu.xml "$SCREENSHOT_DIR/window-repeat-menu.xml" "Days"
@@ -484,6 +542,57 @@ if interval is None or interval.attrib.get("class") != "android.widget.EditText"
 if not any(n.attrib.get("content-desc", "").startswith("Repeat unit: Days") for n in root.iter("node")):
     raise AssertionError("Repeat-unit selection was not retained")
 PY
+
+# With a nonempty title, only invalid recurrence should disable saving.
+tap_ui_label /sdcard/window-repeat-title-anchor.xml "$SCREENSHOT_DIR/window-repeat-title-anchor.xml" "What needs doing?"
+adb shell input text Tdd
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+tap_ui_label /sdcard/window-repeat-interval-anchor.xml "$SCREENSHOT_DIR/window-repeat-interval-anchor.xml" "Repeat interval:" prefix
+sleep 1
+# The numeric interval selects its current value on focus.
+adb shell input text 0
+sleep 1
+adb shell dumpsys input_method > "$SCREENSHOT_DIR/repeat-keyboard-state.txt"
+if ! grep -q 'mInputShown=true' "$SCREENSHOT_DIR/repeat-keyboard-state.txt"; then
+  echo "Repeat interval regression requires the soft keyboard to be open" >&2
+  exit 1
+fi
+snapshot_ui window-repeat-invalid-keyboard
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02g-repeat-invalid-keyboard.png"
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-repeat-invalid-keyboard.xml").getroot()
+interval = next((n for n in root.iter("node")
+                 if n.attrib.get("content-desc", "").startswith("Repeat interval: invalid")), None)
+assert interval is not None and interval.attrib.get("text") == "0", "Invalid interval must remain visibly invalid without coercion"
+save = next(n for n in root.iter("node") if n.attrib.get("text") == "Add task")
+assert save.attrib.get("enabled") == "false", "Invalid recurrence must disable Add task even with a nonempty title"
+PY
+
+adb shell input keyevent KEYCODE_DEL
+adb shell input text 2
+sleep 1
+snapshot_ui window-repeat-valid-keyboard
+adb exec-out screencap -p > "$SCREENSHOT_DIR/02h-repeat-valid-keyboard.png"
+python3 - <<'PY'
+import re
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-repeat-valid-keyboard.xml").getroot()
+interval = next((n for n in root.iter("node")
+                 if n.attrib.get("content-desc") == "Repeat interval: 2"), None)
+assert interval is not None and interval.attrib.get("text") == "2", "Valid interval must retain the entered value"
+assert interval.attrib.get("focused") == "true", "The deep repeat field must keep focus while typing"
+save = next(n for n in root.iter("node") if n.attrib.get("text") == "Add task")
+assert save.attrib.get("enabled") == "true", "Valid recurrence with a title must re-enable Add task"
+bounds = lambda n: list(map(int, re.findall(r"\d+", n.attrib["bounds"])))
+field, action = bounds(interval), bounds(save)
+assert 0 <= field[1] < field[3] <= action[1], f"Focused repeat input must stay visible above the action strip: field={field}, action={action}"
+assert field[3] - field[1] >= 80, f"Repeat field was clipped while the keyboard was open: {field}"
+assert action[3] <= 900, f"Keyboard-open action strip is too low: {action}"
+PY
+adb shell input keyevent KEYCODE_BACK
+sleep 1
 
 tap_ui_label /sdcard/window-repeat-days-anchor.xml "$SCREENSHOT_DIR/window-repeat-days-anchor.xml" "Repeat unit:" prefix
 sleep 1
@@ -505,6 +614,13 @@ if not any(n.attrib.get("content-desc") == "Set reminder" for n in root.iter("no
 if any(n.attrib.get("content-desc") == "Repeats every" for n in root.iter("node")):
     raise AssertionError("Closed reminder settings left recurrence controls in the capture sheet")
 PY
+
+# Remove the temporary validation title before the existing task-entry flow.
+tap_ui_label /sdcard/window-repeat-title-reset.xml "$SCREENSHOT_DIR/window-repeat-title-reset.xml" "Tdd"
+adb shell input keyevent KEYCODE_MOVE_END
+adb shell input keyevent KEYCODE_DEL KEYCODE_DEL KEYCODE_DEL
+adb shell input keyevent KEYCODE_BACK
+sleep 1
 
 read initial_list_x initial_list_y < "$SCREENSHOT_DIR/initial-list-pill-center.txt"
 adb shell input tap "$initial_list_x" "$initial_list_y"
@@ -946,10 +1062,39 @@ def center(bounds):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 root = ET.parse(f"{SCREENSHOT_DIR}/window-after-edit-close.xml").getroot()
-checkbox = next(node for node in root.iter("node") if node.attrib.get("class") == "android.widget.CheckBox")
+parents = {child: parent for parent in root.iter() for child in parent}
+title = "CI_task_with_a_long_title_that_should_wrap_fully"
+candidates = []
+for checkbox in root.iter("node"):
+    if checkbox.attrib.get("class") != "android.widget.CheckBox":
+        continue
+    parent = parents.get(checkbox)
+    while parent is not None:
+        if any(node.attrib.get("text") == title for node in parent.iter("node")):
+            x1, y1, x2, y2 = map(int, re.findall(r"\d+", parent.attrib["bounds"]))
+            candidates.append(((x2 - x1) * (y2 - y1), checkbox))
+            break
+        parent = parents.get(parent)
+if not candidates:
+    raise AssertionError("Could not find the completion circle for the Android-created task")
+_, checkbox = min(candidates, key=lambda candidate: candidate[0])
 x, y = center(checkbox.attrib["bounds"])
+x1, _, x2, _ = map(int, re.findall(r"\d+", checkbox.attrib["bounds"]))
+# The emulator density is 320dpi (2 physical px per dp). This lands 12dp
+# from the center: outside the 9dp visual ring, inside its 24dp touch radius.
+off_ring_x = x + 24
+assert off_ring_x > x2, f"Regression tap must be outside the visual circle: {checkbox.attrib['bounds']}"
 with open(f"{SCREENSHOT_DIR}/checkbox-center.txt", "w") as f:
-    f.write(f"{x} {y}\n")
+    f.write(f"{off_ring_x} {y}\n")
+PY
+
+curl -fsS http://127.0.0.1:8787/api/state > "$SCREENSHOT_DIR/server-state-before-off-ring-complete.json"
+python3 - <<'PY'
+import json
+with open("app/build/verification-screenshots/server-state-before-off-ring-complete.json") as source:
+    state = json.load(source)
+task = next(t for t in state["tasks"] if t["title"] == "CI_task_with_a_long_title_that_should_wrap_fully")
+assert not task["completed"], "The off-ring regression test must start with an incomplete task"
 PY
 
 read check_x check_y < "$SCREENSHOT_DIR/checkbox-center.txt"
@@ -958,6 +1103,43 @@ sleep 1
 adb exec-out screencap -p > "$SCREENSHOT_DIR/04-after-checkbox-complete.png"
 adb shell uiautomator dump /sdcard/window-after-checkbox-complete.xml
 adb pull /sdcard/window-after-checkbox-complete.xml "$SCREENSHOT_DIR/window-after-checkbox-complete.xml"
+
+# A screenshot alone cannot prove that the expanded touch target completed
+# the intended task. Verify the same stable ID and completion delta via sync.
+python3 - <<'PY'
+import json
+import time
+import urllib.error
+import urllib.request
+
+folder = "app/build/verification-screenshots"
+with open(f"{folder}/server-state-before-off-ring-complete.json") as source:
+    before = json.load(source)
+title = "CI_task_with_a_long_title_that_should_wrap_fully"
+expected = next(task for task in before["tasks"] if task["title"] == title)
+before_completed = {task["id"] for task in before["tasks"] if task["completed"]}
+last_error = "completion was absent"
+for _ in range(30):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8787/api/state", timeout=2) as response:
+            after = json.load(response)
+        actual = next((task for task in after["tasks"] if task["id"] == expected["id"]), None)
+        if actual is not None and actual["completed"]:
+            after_completed = {task["id"] for task in after["tasks"] if task["completed"]}
+            assert after_completed == before_completed | {expected["id"]}, "Off-ring tap completed the wrong task or more than one task"
+            assert actual["title"] == title, "Completion changed task identity"
+            assert actual["updatedAt"] > expected["updatedAt"], "Completion did not advance the mutation timestamp"
+            with open(f"{folder}/server-state-after-off-ring-complete.json", "w") as destination:
+                json.dump(after, destination, indent=2)
+                destination.write("\n")
+            print(f"Off-ring completion synced: {expected['id']}; completed count {len(before_completed)} -> {len(after_completed)}")
+            break
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        last_error = str(error)
+    time.sleep(1)
+else:
+    raise AssertionError(f"Off-ring tap did not complete the intended task within 30s: {last_error}")
+PY
 
 cat > "$SCREENSHOT_DIR/web-sync-request.json" <<'EOF'
 {
@@ -1066,11 +1248,66 @@ root = ET.parse("app/build/verification-screenshots/window-search-restored.xml")
 assert any(n.attrib.get("text") == "Web_synced_task" for n in root.iter("node")), "Clear search did not restore tasks"
 PY
 
+# Every bottom destination changes the visible surface and returns to Tasks.
+tap_ui_label /sdcard/window-nav-focus-anchor.xml "$SCREENSHOT_DIR/window-nav-focus-anchor.xml" "Focus"
+sleep 1
+assert_ui_labels window-nav-focus "Today" "Web_synced_task"
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05b-day-focus.png"
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-nav-focus.xml").getroot()
+assert not any(n.attrib.get("text") == "PRIORITY INDEX" for n in root.iter("node")), "Focus must hide the task index"
+PY
+tap_ui_label /sdcard/window-nav-later-anchor.xml "$SCREENSHOT_DIR/window-nav-later-anchor.xml" "Later"
+sleep 1
+assert_ui_labels window-nav-later "For later"
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05c-day-later.png"
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-nav-later.xml").getroot()
+assert not any(n.attrib.get("text") == "Web_synced_task" for n in root.iter("node")), "Later must exclude active tasks"
+PY
+tap_ui_label /sdcard/window-nav-stats-anchor.xml "$SCREENSHOT_DIR/window-nav-stats-anchor.xml" "Stats"
+sleep 1
+assert_ui_labels window-nav-stats "Every task counts"
+adb exec-out screencap -p > "$SCREENSHOT_DIR/05d-day-stats.png"
+tap_ui_label /sdcard/window-nav-tasks-anchor.xml "$SCREENSHOT_DIR/window-nav-tasks-anchor.xml" "Tasks"
+sleep 1
+assert_ui_labels window-nav-tasks "Today" "PRIORITY INDEX" "Web_synced_task"
+
+# Existing list selection and both dock arrows must apply real filters.
+tap_ui_label /sdcard/window-list-select-anchor.xml "$SCREENSHOT_DIR/window-list-select-anchor.xml" "Choose list"
+sleep 1
+tap_ui_label /sdcard/window-list-select-legacy.xml "$SCREENSHOT_DIR/window-list-select-legacy.xml" "Legacy_list"
+sleep 1
+assert_ui_labels window-list-selected-legacy "Legacy_low_priority_task"
+tap_ui_label /sdcard/window-list-return-anchor.xml "$SCREENSHOT_DIR/window-list-return-anchor.xml" "Choose list"
+sleep 1
+tap_ui_label /sdcard/window-list-return-all.xml "$SCREENSHOT_DIR/window-list-return-all.xml" "All"
+sleep 1
+assert_ui_labels window-list-all "Web_synced_task"
+tap_ui_label /sdcard/window-list-next-anchor.xml "$SCREENSHOT_DIR/window-list-next-anchor.xml" "Next list"
+sleep 1
+assert_ui_labels window-list-recurring "Nothing in the index yet."
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+root = ET.parse("app/build/verification-screenshots/window-list-recurring.xml").getroot()
+assert not any(n.attrib.get("text") in {"Web_synced_task", "Legacy_low_priority_task"} for n in root.iter("node")), "Recurring must exclude one-off tasks"
+PY
+tap_ui_label /sdcard/window-list-previous-anchor.xml "$SCREENSHOT_DIR/window-list-previous-anchor.xml" "Previous list"
+sleep 1
+assert_ui_labels window-list-previous-all "Web_synced_task"
+
 # Verify every native surface in explicit night mode, including dialogs that
 # otherwise inherit Android's light application theme.
 tap_ui_label /sdcard/window-theme-day.xml "$SCREENSHOT_DIR/window-theme-day.xml" "Day theme"
 sleep 1
 capture_palette 06-night-home night
+for screen in Focus Later Stats Tasks; do
+  tap_ui_label "/sdcard/window-night-nav-$screen.xml" "$SCREENSHOT_DIR/window-night-nav-$screen.xml" "$screen"
+  sleep 1
+  capture_palette "06-night-$screen" night
+done
 
 tap_ui_label /sdcard/window-night-lists-anchor.xml "$SCREENSHOT_DIR/window-night-lists-anchor.xml" "Choose list"
 sleep 1
@@ -1095,6 +1332,24 @@ sleep 1
 tap_ui_label /sdcard/window-night-reminder-tomorrow.xml "$SCREENSHOT_DIR/window-night-reminder-tomorrow.xml" "Tomorrow"
 sleep 1
 capture_palette 10-night-reminder-settings night
+snapshot_ui window-night-reminder-before-picker
+# Cancelling either native picker must retain the exact reminder draft.
+tap_ui_label /sdcard/window-night-custom-date-anchor.xml "$SCREENSHOT_DIR/window-night-custom-date-anchor.xml" "Custom date & time"
+sleep 1
+capture_palette 10b-night-date-picker night
+tap_ui_label /sdcard/window-night-date-cancel.xml "$SCREENSHOT_DIR/window-night-date-cancel.xml" "CANCEL"
+sleep 1
+snapshot_ui window-night-reminder-after-date-cancel
+assert_unchanged_ui_texts window-night-reminder-before-picker window-night-reminder-after-date-cancel
+tap_ui_label /sdcard/window-night-custom-time-anchor.xml "$SCREENSHOT_DIR/window-night-custom-time-anchor.xml" "Custom date & time"
+sleep 1
+tap_ui_label /sdcard/window-night-date-confirm.xml "$SCREENSHOT_DIR/window-night-date-confirm.xml" "OK"
+sleep 1
+capture_palette 10c-night-time-picker night
+tap_ui_label /sdcard/window-night-time-cancel.xml "$SCREENSHOT_DIR/window-night-time-cancel.xml" "CANCEL"
+sleep 1
+snapshot_ui window-night-reminder-after-time-cancel
+assert_unchanged_ui_texts window-night-reminder-before-picker window-night-reminder-after-time-cancel
 tap_ui_label /sdcard/window-night-reminder-close.xml "$SCREENSHOT_DIR/window-night-reminder-close.xml" "Close reminder settings"
 sleep 1
 tap_ui_label /sdcard/window-night-cancel-add.xml "$SCREENSHOT_DIR/window-night-cancel-add.xml" "Cancel"

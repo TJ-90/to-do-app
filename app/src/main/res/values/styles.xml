@@ -12,6 +12,5 @@
         <item name="android:textColorPrimary">#F1F3F8</item>
         <item name="android:textColorSecondary">#969CB0</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

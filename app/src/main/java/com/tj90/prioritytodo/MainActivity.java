@@ -1,6 +1,7 @@
 package com.tj90.prioritytodo;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -168,6 +169,7 @@ public final class MainActivity extends Activity {
     private Runnable cheerDismiss;
 
     // ---- sheet draft state ----
+    private android.window.OnBackInvokedCallback sheetBackCallback;
     private boolean sheetOpen;
     private String sheetMode = "add";
     private String sheetEditId;
@@ -254,6 +256,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        unregisterSheetBack();
         handler.removeCallbacks(debouncedSync);
         handler.removeCallbacks(reminderPriorityRefresh);
         handler.removeCallbacks(restoreListDock);
@@ -641,7 +644,7 @@ public final class MainActivity extends Activity {
 
     private void stepNavigationList(int direction) {
         List<String> tabs = tabList();
-        int index = recurringOnly ? 1 : "All".equals(activeCat) ? 0 : tabs.indexOf(activeCat);
+        int index = recurringOnly ? 1 : "All".equals(activeCat) ? 0 : categories.indexOf(activeCat) + 2;
         int next = (index + direction + tabs.size()) % tabs.size();
         selectNavigationList(tabs.get(next), next == 1);
     }
@@ -1447,7 +1450,7 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout fg = horizontal();
-        fg.setPadding(dp(16), dp(13), dp(16), dp(13));
+        fg.setPadding(dp(8), dp(8), dp(16), dp(8));
         fg.setMinimumHeight(dp(64));
         fg.setBackgroundColor(palette.surface);
         GradientDrawable bottomLine = new GradientDrawable();
@@ -1477,19 +1480,12 @@ public final class MainActivity extends Activity {
             completeTask(task.id);
         });
         boolean rowExpanded = isTaskExpanded("row", task.id);
-        LinearLayout.LayoutParams circleParams = new LinearLayout.LayoutParams(dp(18), dp(18));
-        circleParams.rightMargin = dp(14);
-        circleParams.gravity = rowExpanded ? Gravity.TOP : Gravity.CENTER_VERTICAL;
-        if (rowExpanded) {
-            circleParams.topMargin = dp(2);
-        }
-        fg.addView(circle, circleParams);
-        fg.post(() -> {
-            Rect hit = new Rect();
-            circle.getHitRect(hit);
-            hit.inset(-dp(15), -dp(15));
-            fg.setTouchDelegate(new android.view.TouchDelegate(hit, circle));
-        });
+        FrameLayout circleTarget = new FrameLayout(this);
+        circleTarget.setOnClickListener(v -> circle.performClick());
+        circleTarget.addView(circle, new FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER));
+        LinearLayout.LayoutParams targetParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        targetParams.gravity = rowExpanded ? Gravity.TOP : Gravity.CENTER_VERTICAL;
+        fg.addView(circleTarget, targetParams);
 
         LinearLayout copy = vertical();
         if (rowExpanded) {
@@ -2373,6 +2369,7 @@ public final class MainActivity extends Activity {
             removeSheetImmediate();
         }
         sheetOpen = true;
+        registerSheetBack();
         hideActZoneInstant();
 
         sheetOverlay = new FrameLayout(this);
@@ -3212,10 +3209,12 @@ public final class MainActivity extends Activity {
                     restoreActZone();
                 }).start();
         sheetOverlay = null;
+        unregisterSheetBack();
         sheetOpen = false;
     }
 
     private void removeSheetImmediate() {
+        unregisterSheetBack();
         stopAdjustPulse();
         if (sheetOverlay != null) {
             detachSheetKeyboardHandling();
@@ -3269,6 +3268,23 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void registerSheetBack() {
+        if (Build.VERSION.SDK_INT >= 33 && sheetBackCallback == null) {
+            sheetBackCallback = this::closeSheet;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, sheetBackCallback);
+        }
+    }
+
+    private void unregisterSheetBack() {
+        if (Build.VERSION.SDK_INT >= 33 && sheetBackCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(sheetBackCallback);
+            sheetBackCallback = null;
+        }
+    }
+
+    // API 33+ uses the dispatcher while the sheet is open; older devices use this callback.
+    @SuppressLint("GestureBackNavigation")
     @Override
     public void onBackPressed() {
         if (sheetOpen) {
@@ -3357,7 +3373,10 @@ public final class MainActivity extends Activity {
             keepNotesCaretVisible();
             return;
         }
-        sheetScroll.post(() -> sheetScroll.smoothScrollTo(0, 0));
+        if (focused != null) {
+            focused.post(() -> focused.requestRectangleOnScreen(
+                    new Rect(0, 0, focused.getWidth(), focused.getHeight()), false));
+        }
     }
 
     private void keepNotesCaretVisible() {
